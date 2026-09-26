@@ -8,7 +8,11 @@ interface SelectedPoint {
   yPercent: number;
 }
 
-export const OceanExplorer: React.FC = () => {
+interface OceanExplorerProps {
+  onExploreProfile?: (lat: number, lng: number) => void;
+}
+
+export const OceanExplorer: React.FC<OceanExplorerProps> = ({ onExploreProfile }) => {
   const [selectedRegion, setSelectedRegion] = useState<'bob' | 'as'>('bob');
   const [selectedDate, setSelectedDate] = useState('2024-05-15');
   const [selectedPoint, setSelectedPoint] = useState<SelectedPoint | null>({
@@ -245,12 +249,11 @@ export const OceanExplorer: React.FC = () => {
               </div>
             </div>
 
-            {/* Explore Profile CTA (Visually present, does nothing yet) */}
+            {/* Explore Profile CTA */}
             <div className="pt-4 border-t border-navy-border">
               <button
-                disabled
-                className="w-full bg-accent/20 border border-accent/40 text-accent font-medium py-2.5 px-4 rounded text-xs flex items-center justify-center gap-2 cursor-not-allowed opacity-80"
-                title="OceanDive profile reconstruction available in Phase 3"
+                onClick={() => onExploreProfile && onExploreProfile(selectedPoint.lat, selectedPoint.lng)}
+                className="w-full bg-accent text-navy-deep font-semibold py-2.5 px-4 rounded text-xs flex items-center justify-center gap-2 hover:bg-opacity-90 transition-colors cursor-pointer"
               >
                 <span>Explore Profile</span>
                 <ChevronRight className="w-3.5 h-3.5" />
