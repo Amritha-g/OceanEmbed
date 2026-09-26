@@ -15,7 +15,7 @@ const SoftWireframeSphere: React.FC = () => {
   return (
     <mesh ref={meshRef}>
       <sphereGeometry args={[2.2, 24, 24]} />
-      <meshBasicMaterial wireframe color="#22d3ee" transparent opacity={0.35} />
+      <meshBasicMaterial wireframe color="#22d3ee" transparent opacity={0.18} />
     </mesh>
   );
 };

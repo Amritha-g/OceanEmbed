@@ -8,14 +8,14 @@ export default {
     extend: {
       colors: {
         navy: {
-          deep: '#0a1628',
-          panel: 'rgba(15, 31, 56, 0.6)',
-          border: 'rgba(34, 211, 238, 0.15)',
+          deep: '#050b14',
+          panel: 'rgba(10, 22, 40, 0.5)',
+          border: 'rgba(34, 211, 238, 0.10)',
         },
         accent: {
           DEFAULT: '#22d3ee',
-          muted: 'rgba(34, 211, 238, 0.4)',
-          glow: 'rgba(34, 211, 238, 0.08)',
+          muted: 'rgba(34, 211, 238, 0.3)',
+          glow: 'rgba(34, 211, 238, 0.05)',
         },
         text: {
           heading: '#f8fafc',

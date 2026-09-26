@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { HomeScreen } from './components/HomeScreen';
-import { OceanExplorerPlaceholder } from './components/OceanExplorerPlaceholder';
+import { OceanExplorer } from './components/OceanExplorer';
 
 export function App() {
   const [activeView, setActiveView] = useState<'home' | 'explorer'>('home');
@@ -23,7 +23,7 @@ export function App() {
         {activeView === 'home' ? (
           <HomeScreen onExplore={() => setActiveView('explorer')} />
         ) : (
-          <OceanExplorerPlaceholder />
+          <OceanExplorer />
         )}
       </main>
     </div>

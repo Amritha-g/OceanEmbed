@@ -63,7 +63,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onSelectTab }) => {
                 </div>
 
                 {!item.active && (
-                  <span className="hidden md:inline-block text-[10px] font-mono uppercase tracking-wider px-1.5 py-0.5 rounded border border-navy-border text-text-muted bg-navy-deep/50">
+                  <span className="hidden md:inline-block text-[9px] font-mono uppercase tracking-wider px-1.5 py-0.5 rounded border border-navy-border/40 text-text-muted/40 bg-navy-deep/30 select-none">
                     Coming soon
                   </span>
                 )}
