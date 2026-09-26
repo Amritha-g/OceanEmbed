@@ -12,8 +12,8 @@ const navItems: NavItem[] = [
   { id: 'explorer', label: 'Ocean Explorer', icon: Compass, active: true },
   { id: 'dive', label: 'OceanDive', icon: Waves, active: true },
   { id: 'reconstruction', label: 'Reconstruction', icon: Cpu, active: false },
-  { id: 'truth-check', label: 'Truth Check', icon: ShieldCheck, active: false },
-  { id: 'intelligence', label: 'Ocean Intelligence', icon: BrainCircuit, active: false },
+  { id: 'truth-check', label: 'Truth Check', icon: ShieldCheck, active: true },
+  { id: 'intelligence', label: 'Ocean Intelligence', icon: BrainCircuit, active: true },
 ];
 
 interface SidebarProps {

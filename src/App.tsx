@@ -3,9 +3,11 @@ import { Sidebar } from './components/Sidebar';
 import { HomeScreen } from './components/HomeScreen';
 import { OceanExplorer } from './components/OceanExplorer';
 import { OceanDive } from './components/OceanDive';
+import { TruthCheck } from './components/TruthCheck';
+import { OceanIntelligence } from './components/OceanIntelligence';
 
 export function App() {
-  const [activeView, setActiveView] = useState<'home' | 'explorer' | 'dive'>('home');
+  const [activeView, setActiveView] = useState<'home' | 'explorer' | 'dive' | 'truth-check' | 'intelligence'>('home');
   const [targetCoords, setTargetCoords] = useState<{ lat: number; lng: number }>({
     lat: 15.50,
     lng: 88.25,
@@ -24,6 +26,8 @@ export function App() {
         onSelectTab={(id) => {
           if (id === 'explorer') setActiveView('explorer');
           if (id === 'dive') setActiveView('dive');
+          if (id === 'truth-check') setActiveView('truth-check');
+          if (id === 'intelligence') setActiveView('intelligence');
         }}
       />
 
@@ -37,6 +41,18 @@ export function App() {
         )}
         {activeView === 'dive' && (
           <OceanDive
+            coordinates={targetCoords}
+            onBackToExplorer={() => setActiveView('explorer')}
+          />
+        )}
+        {activeView === 'truth-check' && (
+          <TruthCheck
+            coordinates={targetCoords}
+            onBackToExplorer={() => setActiveView('explorer')}
+          />
+        )}
+        {activeView === 'intelligence' && (
+          <OceanIntelligence
             coordinates={targetCoords}
             onBackToExplorer={() => setActiveView('explorer')}
           />
