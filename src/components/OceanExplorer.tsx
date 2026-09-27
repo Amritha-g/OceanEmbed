@@ -1,398 +1,794 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import L from 'leaflet';
 import {
-  Calendar, Layers, MapPin, ChevronRight, X,
-  Thermometer, Wind, Anchor, Download
+  Layers, ChevronRight, Anchor,
+  Sun, Moon, Globe, Eye, EyeOff, Activity
 } from 'lucide-react';
 
 interface SelectedPoint {
-  lat: number; lng: number; xPercent: number; yPercent: number;
+  lat: number;
+  lng: number;
 }
+
+import {
+  REGION_CONFIGS,
+  getPhysicalVariables,
+  ActiveRegion,
+} from '../utils/oceanPhysics';
 
 interface OceanExplorerProps {
   onExploreProfile?: (lat: number, lng: number) => void;
+  onRegionChange?: (region: ActiveRegion) => void;
+  initialRegion?: ActiveRegion;
 }
 
-// ── Mock data ──────────────────────────────────────────────────────────────
-const HEATWAVE_ALERTS = [
-  { id: 'HW-001', date: '2024-03-18', region: 'Bay of Bengal NW', severity: 'HIGH',   delta: '+1.8°C', duration: '12 days' },
-  { id: 'HW-002', date: '2024-03-09', region: 'Arabian Sea E',    severity: 'MODERATE',delta: '+1.1°C', duration: '7 days' },
-  { id: 'HW-003', date: '2024-02-22', region: 'Andaman Sea',      severity: 'LOW',    delta: '+0.6°C', duration: '4 days' },
-];
-
-const ARGO_FLOATS = [
-  { id: '6904117', lat: 14.22, lng: 88.41, lastProfile: '2024-03-29', depth: 1000, cycles: 142 },
-  { id: '6904231', lat: 17.85, lng: 91.07, lastProfile: '2024-03-27', depth: 2000, cycles: 89  },
-  { id: '6903821', lat: 11.53, lng: 84.66, lastProfile: '2024-03-25', depth: 1000, cycles: 201 },
-  { id: '6904019', lat: 20.14, lng: 94.32, lastProfile: '2024-03-22', depth: 500,  cycles: 67  },
-];
-
-const CYCLONE_EVENT = { name: 'Low-Pressure Area 03B', lat: 18.5, lng: 91.0, status: 'Monitoring', maxWind: '35 kn' };
-
-const severityColor = (s: string) =>
-  s === 'HIGH' ? 'text-red-400 border-red-500/30 bg-red-500/8' :
-  s === 'MODERATE' ? 'text-amber-400 border-amber-500/30 bg-amber-500/8' :
-  'text-emerald-400 border-emerald-500/30 bg-emerald-500/8';
-
-// ── Proto toggle button ─────────────────────────────────────────────────────
-const ProtoToggle: React.FC<{ label: string; active: boolean; onClick: () => void; color: string }> = ({ label, active, onClick, color }) => {
-  const colorMap: Record<string, string> = {
-    amber: 'text-amber-400 border-amber-500/40 bg-amber-500/10',
-    red:   'text-red-400 border-red-500/40 bg-red-500/10',
-    cyan:  'text-accent border-accent/40 bg-accent/10 shadow-glow-sm',
-    slate: 'text-text-muted border-navy-border bg-navy-deep/60',
-  };
-  return (
-    <button onClick={onClick}
-      className={`flex items-center gap-1.5 text-[10px] font-mono px-2.5 py-1 rounded-lg border transition-all ${
-        active ? colorMap[color] : 'text-text-muted border-navy-border hover:border-accent/20'
-      }`}>
-      <span>{label}</span>
-      <span className="roadmap-badge">P2</span>
-    </button>
-  );
+// ── Tile Providers ────────────────────────────────────────────────────────
+const MAP_THEMES = {
+  dark: {
+    label: 'Dark',
+    icon: Moon,
+    // Stadia Maps dark — completely free, no API key required
+    url: 'https://tiles.stadiamaps.com/tiles/alidade_smooth_dark/{z}/{x}/{y}{r}.png',
+    attribution: '&copy; <a href="https://stadiamaps.com/">Stadia Maps</a> &copy; <a href="https://openmaptiles.org/">OpenMapTiles</a> &copy; <a href="https://openstreetmap.org">OpenStreetMap</a>',
+    maxZoom: 20,
+  },
+  satellite: {
+    label: 'Satellite',
+    icon: Globe,
+    // Esri World Imagery — free, no key needed
+    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    attribution: 'Tiles &copy; Esri &mdash; Source: Esri, Maxar, Earthstar Geographics',
+    maxZoom: 18,
+  },
+  light: {
+    label: 'Light',
+    icon: Sun,
+    // OpenStreetMap standard — completely free
+    url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+    attribution: '&copy; <a href="https://openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    maxZoom: 19,
+  },
 };
 
-// ── Bounds ─────────────────────────────────────────────────────────────────
-const MIN_LAT = 8, MAX_LAT = 22, MIN_LNG = 80, MAX_LNG = 100;
+export const OceanExplorer: React.FC<OceanExplorerProps> = ({
+  onExploreProfile,
+  onRegionChange,
+  initialRegion = 'bob',
+}) => {
+  // State
+  const [selectedRegion, setSelectedRegion] = useState<ActiveRegion>(initialRegion);
+  const [mapTheme, setMapTheme] = useState<'dark' | 'satellite' | 'light'>('dark');
+  const [selectedPoint, setSelectedPoint] = useState<SelectedPoint>(
+    initialRegion === 'bob' ? { lat: 15.50, lng: 88.25 } : { lat: 16.50, lng: 66.50 }
+  );
 
-const toPercent = (lat: number, lng: number) => ({
-  x: ((lng - MIN_LNG) / (MAX_LNG - MIN_LNG)) * 100,
-  y: ((MAX_LAT - lat) / (MAX_LAT - MIN_LAT)) * 100,
-});
 
-const getMockVariables = (lat: number, lng: number) => ({
-  sst:     (27.2 + ((lat * 0.1 + lng * 0.05) % 3)).toFixed(1),
-  sss:     (33.5 + ((lat * 0.08 + lng * 0.03) % 1.5)).toFixed(1),
-  ssh:     (0.08 + ((lat * 0.01 + lng * 0.005) % 0.15)).toFixed(2),
-  current: (0.25 + ((lat * 0.02 + lng * 0.01) % 0.4)).toFixed(2),
-  wind:    (4.5  + ((lat * 0.15 + lng * 0.05) % 4.0)).toFixed(1),
-});
+  // Layer Toggles
+  const [showHeatwave, setShowHeatwave] = useState(true);
+  const [showCyclone, setShowCyclone] = useState(true);
+  const [showArgo, setShowArgo] = useState(true);
+  const [showPointCloud, setShowPointCloud] = useState(true);
 
-// ── Accurate Bay of Bengal / Arabian Sea coastline (SVG paths) ─────────────
-// ViewBox maps to 8-22°N, 80-100°E  →  width=1000, height=700
-// lat → y = (22 - lat) / 14 * 700;  lng → x = (lng - 80) / 20 * 1000
-const COASTLINE_PATHS = [
-  // Indian east coast (Coromandel) + tip of India
-  "M 465 0 L 475 40 L 490 90 L 510 150 L 530 220 L 545 290 L 555 350 L 545 420 L 520 480 L 495 520 L 480 560 L 470 630 L 490 700",
-  // Sri Lanka
-  "M 485 510 L 500 490 L 530 500 L 545 530 L 535 560 L 510 570 L 490 555 Z",
-  // Indian west coast (Malabar) partial
-  "M 470 700 L 455 640 L 440 580 L 430 520 L 420 460 L 415 400 L 420 340 L 435 280 L 450 220 L 460 160 L 465 90 L 465 0",
-  // Myanmar/Bangladesh coast
-  "M 1000 0 L 940 0 L 900 30 L 870 80 L 840 140 L 810 200 L 800 260 L 790 310 L 800 360 L 810 420 L 840 480 L 870 540 L 900 600 L 930 660 L 950 700 L 1000 700",
-  // Andaman Islands approximate
-  "M 795 160 L 800 180 L 798 200 L 793 195 Z",
-  "M 790 230 L 796 250 L 792 265 L 787 255 Z",
-];
+  // Inspector Panel State (Single floating tabbed panel)
+  const [activeTab, setActiveTab] = useState<'inspect' | 'heatwave' | 'cyclone' | 'argo' | 'export'>('inspect');
+  const [isPanelCollapsed, setIsPanelCollapsed] = useState(false);
 
-export const OceanExplorer: React.FC<OceanExplorerProps> = ({ onExploreProfile }) => {
-  const [selectedRegion, setSelectedRegion] = useState<'bob' | 'as'>('bob');
-  const [selectedDate, setSelectedDate]     = useState('2024-03-15');
-  const [selectedPoint, setSelectedPoint]   = useState<SelectedPoint | null>({
-    lat: 15.50, lng: 88.25, xPercent: toPercent(15.5, 88.25).x, yPercent: toPercent(15.5, 88.25).y,
-  });
-  const [showHeatwave, setShowHeatwave]     = useState(false);
-  const [showCyclone, setShowCyclone]       = useState(false);
-  const [showArgo, setShowArgo]             = useState(false);
-  const [showExport, setShowExport]         = useState(false);
-  const gridRef = useRef<HTMLDivElement>(null);
+  // Refs
+  const mapContainerRef = useRef<HTMLDivElement>(null);
+  const mapInstanceRef = useRef<L.Map | null>(null);
+  const tileLayerRef = useRef<L.TileLayer | null>(null);
+  const layerGroupRef = useRef<L.LayerGroup | null>(null);
+  const selectedMarkerRef = useRef<L.Marker | null>(null);
 
-  const handleGridClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!gridRef.current) return;
-    const rect = gridRef.current.getBoundingClientRect();
-    const xPct = ((e.clientX - rect.left) / rect.width) * 100;
-    const yPct = ((e.clientY - rect.top) / rect.height) * 100;
-    const lng = MIN_LNG + (xPct / 100) * (MAX_LNG - MIN_LNG);
-    const lat = MAX_LAT - (yPct / 100) * (MAX_LAT - MIN_LAT);
-    setSelectedPoint({ lat: +lat.toFixed(4), lng: +lng.toFixed(4), xPercent: +xPct.toFixed(2), yPercent: +yPct.toFixed(2) });
+  const currentRegion = REGION_CONFIGS[selectedRegion];
+  const activeVars = getPhysicalVariables(selectedPoint.lat, selectedPoint.lng, selectedRegion);
+
+  // ── Initialize Leaflet Map ────────────────────────────────────────────────
+  useEffect(() => {
+    if (!mapContainerRef.current) return;
+    if (mapInstanceRef.current) return;
+
+    const map = L.map(mapContainerRef.current, {
+      center: currentRegion.center,
+      zoom: currentRegion.zoom,
+      minZoom: 4,
+      maxZoom: 14,
+      zoomControl: true,
+      attributionControl: true,
+    });
+
+    const tile = L.tileLayer(MAP_THEMES[mapTheme].url, {
+      attribution: MAP_THEMES[mapTheme].attribution,
+      maxZoom: MAP_THEMES[mapTheme].maxZoom,
+      subdomains: 'abcd',
+    }).addTo(map);
+
+    tileLayerRef.current = tile;
+    layerGroupRef.current = L.layerGroup().addTo(map);
+    mapInstanceRef.current = map;
+
+    // Ocean Click Listener to sample coordinates
+    map.on('click', (e: L.LeafletMouseEvent) => {
+      const lat = +e.latlng.lat.toFixed(4);
+      const lng = +e.latlng.lng.toFixed(4);
+      setSelectedPoint({ lat, lng });
+      setActiveTab('inspect');
+      setIsPanelCollapsed(false);
+    });
+
+    // Invalidate size after layout settles
+    setTimeout(() => {
+      map.invalidateSize();
+    }, 250);
+
+    return () => {
+      map.remove();
+      mapInstanceRef.current = null;
+    };
+  }, []);
+
+  // ── Switch Map Tile Theme (Dark / Satellite / Light) ─────────────────────
+  useEffect(() => {
+    if (!mapInstanceRef.current || !tileLayerRef.current) return;
+    const map = mapInstanceRef.current;
+    map.removeLayer(tileLayerRef.current);
+
+    const newTile = L.tileLayer(MAP_THEMES[mapTheme].url, {
+      attribution: MAP_THEMES[mapTheme].attribution,
+      maxZoom: MAP_THEMES[mapTheme].maxZoom,
+      subdomains: 'abcd',
+    }).addTo(map);
+
+    tileLayerRef.current = newTile;
+  }, [mapTheme]);
+
+  // ── Handle Region Change (FlyTo + Adjust View) ───────────────────────────
+  const handleRegionChange = (r: ActiveRegion) => {
+    setSelectedRegion(r);
+    onRegionChange?.(r);
+    const target = REGION_CONFIGS[r];
+
+    if (mapInstanceRef.current) {
+      mapInstanceRef.current.flyTo(target.center, target.zoom, {
+        duration: 1.4,
+        easeLinearity: 0.25,
+      });
+    }
+
+    // Set a representative default target point in the new region
+    if (r === 'bob') {
+      setSelectedPoint({ lat: 15.50, lng: 88.25 });
+    } else {
+      setSelectedPoint({ lat: 16.50, lng: 66.50 });
+    }
   };
 
-  const activeVars = selectedPoint ? getMockVariables(selectedPoint.lat, selectedPoint.lng) : null;
-  const cyclonePos = toPercent(CYCLONE_EVENT.lat, CYCLONE_EVENT.lng);
+  useEffect(() => {
+    if (initialRegion && initialRegion !== selectedRegion) {
+      handleRegionChange(initialRegion);
+    }
+  }, [initialRegion]);
 
-  return (
-    <div className="w-full h-screen bg-navy-deep flex flex-col overflow-hidden">
-      {/* ── Header ── */}
-      <header className="h-14 glass-panel border-b border-navy-border px-5 flex items-center justify-between z-10 shrink-0">
-        <div className="flex items-center gap-4">
-          {/* Region pill toggle */}
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] font-mono text-text-muted uppercase tracking-wider hidden sm:block">REGION:</span>
-            <div className="flex bg-navy-deep/80 p-0.5 rounded-lg border border-navy-border text-xs font-mono">
-              {(['bob','as'] as const).map((r) => (
-                <button key={r} onClick={() => setSelectedRegion(r)}
-                  className={`px-3 py-1 rounded-md transition-all ${selectedRegion === r ? 'bg-accent/15 text-accent border border-accent/25 shadow-glow-sm' : 'text-text-body hover:text-text-heading'}`}>
-                  {r === 'bob' ? 'Bay of Bengal' : 'Arabian Sea'}
-                </button>
-              ))}
+  // ── Update Map Overlays (ARGO, Cyclone, Heatwave, Point Cloud, Selected) ─
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    const group = layerGroupRef.current;
+    if (!map || !group) return;
+
+    group.clearLayers();
+
+    // 1. Point Cloud / Grid Samples
+    if (showPointCloud) {
+      currentRegion.sampleGrid.forEach((pt) => {
+        const color =
+          pt.category === 'Heatwave Hazard' ? '#f43f5e' :
+          pt.category === 'Elevated' ? '#f59e0b' :
+          '#00f0ff';
+
+        const circle = L.circleMarker([pt.lat, pt.lng], {
+          radius: 5,
+          fillColor: color,
+          fillOpacity: 0.85,
+          color: '#050b14',
+          weight: 1.5,
+        });
+
+        circle.bindTooltip(`
+          <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px;">
+            <div style="color: ${color}; font-weight: bold;">${pt.category}</div>
+            <div>SST: <b>${pt.sst}°C</b> | Lat: ${pt.lat}°N, Lon: ${pt.lng}°E</div>
+            <div style="color: #64748b; font-size: 9px;">Click to sample thermal profile</div>
+          </div>
+        `, { className: 'ocean-popup', direction: 'top' });
+
+        circle.on('click', (e) => {
+          L.DomEvent.stopPropagation(e);
+          setSelectedPoint({ lat: pt.lat, lng: pt.lng });
+          setActiveTab('inspect');
+          setIsPanelCollapsed(false);
+        });
+
+        group.addLayer(circle);
+      });
+    }
+
+    // 2. Heatwave Anomaly Zones
+    if (showHeatwave) {
+      currentRegion.heatwaves.forEach((hw) => {
+        const color = hw.severity === 'HIGH' ? '#f43f5e' : hw.severity === 'MODERATE' ? '#f59e0b' : '#10b981';
+        const zone = L.circle([hw.lat, hw.lng], {
+          radius: hw.radiusKm * 1000,
+          color: color,
+          weight: 1.5,
+          opacity: 0.7,
+          fillColor: color,
+          fillOpacity: 0.16,
+          dashArray: '4, 6',
+        });
+
+        zone.bindTooltip(`
+          <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px;">
+            <span style="color: ${color}; font-weight: bold;">[${hw.severity}] ${hw.region}</span><br/>
+            ΔSST: <b>${hw.delta}</b> | Duration: ${hw.duration}
+          </div>
+        `, { className: 'ocean-popup', sticky: true });
+
+        zone.on('click', (e) => {
+          L.DomEvent.stopPropagation(e);
+          setSelectedPoint({ lat: hw.lat, lng: hw.lng });
+          setActiveTab('heatwave');
+          setIsPanelCollapsed(false);
+        });
+
+        group.addLayer(zone);
+      });
+    }
+
+    // 3. Cyclone Track & Radius
+    if (showCyclone) {
+      const cyc = currentRegion.cyclone;
+
+      // Track trajectory polyline
+      const trackLine = L.polyline(cyc.track, {
+        color: '#f43f5e',
+        weight: 2.5,
+        opacity: 0.8,
+        dashArray: '6, 6',
+      });
+      group.addLayer(trackLine);
+
+      // Warning radius circle
+      const windCircle = L.circle(cyc.center, {
+        radius: cyc.radiusKm * 1000,
+        color: '#f43f5e',
+        weight: 1,
+        fillColor: '#f43f5e',
+        fillOpacity: 0.1,
+      });
+      group.addLayer(windCircle);
+
+      // Cyclone Eye custom icon
+      const cycloneIcon = L.divIcon({
+        className: 'cyclone-marker-container',
+        html: `
+          <div style="position: relative; display: flex; align-items: center; justify-content: center; cursor: pointer;">
+            <div style="position: absolute; width: 44px; height: 44px; border-radius: 50%; border: 2px solid rgba(244,63,94,0.4); animation: sonar 2.5s infinite;"></div>
+            <div style="width: 26px; height: 26px; border-radius: 50%; background: rgba(80,10,25,0.9); border: 2px solid #f43f5e; display: flex; align-items: center; justify-content: center; box-shadow: 0 0 16px rgba(244,63,94,0.6);">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#f43f5e" stroke-width="2.5"><path d="M12 2v20M2 12h20M4.93 4.93l14.14 14.14M4.93 19.07L19.07 4.93"/></svg>
+            </div>
+            <div style="position: absolute; top: -24px; background: rgba(10,20,40,0.95); border: 1px solid rgba(244,63,94,0.6); padding: 1px 6px; border-radius: 4px; font-size: 9px; font-family: monospace; color: #fecdd3; white-space: nowrap; font-weight: bold;">
+              ${cyc.name}
             </div>
           </div>
+        `,
+        iconSize: [28, 28],
+        iconAnchor: [14, 14],
+      });
 
-          {/* Date picker */}
-          <div className="flex items-center gap-1.5 bg-navy-deep/80 px-3 py-1.5 rounded-lg border border-navy-border text-xs font-mono text-text-heading">
-            <Calendar className="w-3 h-3 text-accent" />
-            <input type="date" value={selectedDate} onChange={e => setSelectedDate(e.target.value)}
-              className="bg-transparent text-text-heading focus:outline-none cursor-pointer" />
+      const cycloneMarker = L.marker(cyc.center, { icon: cycloneIcon });
+      cycloneMarker.on('click', (e) => {
+        L.DomEvent.stopPropagation(e);
+        setSelectedPoint({ lat: cyc.center[0], lng: cyc.center[1] });
+        setActiveTab('cyclone');
+        setIsPanelCollapsed(false);
+      });
+      group.addLayer(cycloneMarker);
+    }
+
+    // 4. ARGO In-Situ Floats
+    if (showArgo) {
+      currentRegion.argoFloats.forEach((f) => {
+        const floatIcon = L.divIcon({
+          className: 'argo-marker-container',
+          html: `
+            <div style="position: relative; display: flex; align-items: center; justify-content: center; cursor: pointer;">
+              <div style="position: absolute; width: 28px; height: 28px; border-radius: 50%; background: rgba(0,240,255,0.2); animation: pulse-radar 2.4s infinite;"></div>
+              <div style="width: 12px; height: 12px; border-radius: 50%; background: #00f0ff; border: 2px solid #ffffff; box-shadow: 0 0 10px #00f0ff;"></div>
+              <div style="position: absolute; left: 16px; top: -4px; background: rgba(5,15,30,0.92); border: 1px solid rgba(0,240,255,0.4); padding: 1px 5px; border-radius: 4px; font-size: 9px; font-family: monospace; color: #67e8f9; white-space: nowrap; font-weight: bold;">
+                #${f.id}
+              </div>
+            </div>
+          `,
+          iconSize: [20, 20],
+          iconAnchor: [10, 10],
+        });
+
+        const floatMarker = L.marker([f.lat, f.lng], { icon: floatIcon });
+        floatMarker.on('click', (e) => {
+          L.DomEvent.stopPropagation(e);
+          setSelectedPoint({ lat: f.lat, lng: f.lng });
+          setActiveTab('argo');
+          setIsPanelCollapsed(false);
+        });
+        group.addLayer(floatMarker);
+      });
+    }
+
+    // 5. Selected User Target Coordinates Pin
+    if (selectedPoint) {
+      if (selectedMarkerRef.current) {
+        group.removeLayer(selectedMarkerRef.current);
+      }
+
+      const targetIcon = L.divIcon({
+        className: 'target-marker-container',
+        html: `
+          <div style="position: relative; display: flex; align-items: center; justify-content: center; pointer-events: none;">
+            <div style="position: absolute; width: 34px; height: 34px; border-radius: 50%; border: 1.5px solid #00f0ff; animation: sonar 1.8s infinite;"></div>
+            <div style="position: absolute; width: 56px; height: 56px; border-radius: 50%; border: 1px solid rgba(0,240,255,0.35); animation: sonar 1.8s infinite; animation-delay: 0.4s;"></div>
+            <div style="width: 14px; height: 14px; border-radius: 50%; background: #00f0ff; border: 2px solid #ffffff; box-shadow: 0 0 14px #00f0ff;"></div>
+          </div>
+        `,
+        iconSize: [24, 24],
+        iconAnchor: [12, 12],
+      });
+
+      const targetMarker = L.marker([selectedPoint.lat, selectedPoint.lng], { icon: targetIcon, zIndexOffset: 1000 });
+      group.addLayer(targetMarker);
+      selectedMarkerRef.current = targetMarker;
+    }
+  }, [selectedRegion, showHeatwave, showCyclone, showArgo, showPointCloud, selectedPoint]);
+
+  // ── Fly Map To Feature on Tab Click ───────────────────────────────────────
+  const flyToCoord = (lat: number, lng: number, zoomLevel: number = 7) => {
+    setSelectedPoint({ lat, lng });
+    if (mapInstanceRef.current) {
+      mapInstanceRef.current.flyTo([lat, lng], zoomLevel, { duration: 1.0 });
+    }
+  };
+
+
+
+  return (
+    <div className="w-full h-screen bg-[#050b14] flex flex-col overflow-hidden relative select-none">
+      
+      {/* ── TOP HEADER ── */}
+      <header className="h-14 glass-panel border-b border-cyan-500/20 px-6 md:px-8 flex items-center justify-between z-30 shrink-0 shadow-lg gap-4">
+
+        {/* Left: Region Selector */}
+        <div className="flex items-center gap-3 shrink-0">
+          <span className="text-[10px] font-mono text-slate-500 uppercase tracking-widest hidden md:block">REGION</span>
+          <div className="flex bg-[#061022]/90 p-1 rounded-xl border border-cyan-500/25 text-xs font-mono gap-1">
+            {(['bob', 'as'] as const).map((r) => (
+              <button
+                key={r}
+                onClick={() => handleRegionChange(r)}
+                className={`px-4 py-1.5 rounded-lg transition-all duration-200 font-medium whitespace-nowrap ${
+                  selectedRegion === r
+                    ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-400/40 shadow-glow-sm'
+                    : 'text-slate-400 hover:text-white hover:bg-white/5'
+                }`}
+              >
+                {r === 'bob' ? 'Bay of Bengal' : 'Arabian Sea'}
+              </button>
+            ))}
           </div>
         </div>
 
-        {/* Proto feature toggles */}
-        <div className="flex items-center gap-2">
-          <ProtoToggle label="Heatwave" active={showHeatwave} onClick={() => setShowHeatwave(v => !v)} color="amber" />
-          <ProtoToggle label="Cyclone" active={showCyclone} onClick={() => setShowCyclone(v => !v)} color="red" />
-          <ProtoToggle label="ARGO Floats" active={showArgo} onClick={() => setShowArgo(v => !v)} color="cyan" />
-          <ProtoToggle label="Export/API" active={showExport} onClick={() => setShowExport(v => !v)} color="slate" />
+        {/* Right: Map Theme Toggle + Telemetry */}
+        <div className="flex items-center gap-2 ml-auto">
+          <div className="flex bg-[#061022]/90 p-1 rounded-xl border border-cyan-500/25 text-xs font-mono gap-0.5">
+            {(Object.keys(MAP_THEMES) as Array<keyof typeof MAP_THEMES>).map((key) => {
+              const ThemeIcon = MAP_THEMES[key].icon;
+              const isSelected = mapTheme === key;
+              return (
+                <button
+                  key={key}
+                  onClick={() => setMapTheme(key)}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all ${
+                    isSelected
+                      ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-400/40 shadow-glow-sm font-semibold'
+                      : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
+                  }`}
+                  title={`${MAP_THEMES[key].label} map variant`}
+                >
+                  <ThemeIcon className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">{MAP_THEMES[key].label}</span>
+                </button>
+              );
+            })}
+          </div>
+
+          <button
+            onClick={() => setIsPanelCollapsed((prev) => !prev)}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-mono transition-all ${
+              !isPanelCollapsed
+                ? 'bg-cyan-500/15 border-cyan-400/35 text-cyan-300 shadow-glow-sm'
+                : 'bg-[#061022]/80 border-slate-700 text-slate-400 hover:border-cyan-500/30'
+            }`}
+          >
+            <Activity className="w-3.5 h-3.5 text-cyan-400" />
+            <span className="hidden sm:inline">Telemetry</span>
+            {isPanelCollapsed ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
+          </button>
         </div>
       </header>
 
-      {/* ── Main Workspace ── */}
-      <div className="flex-1 flex relative overflow-hidden">
+      {/* ── MAIN MAP WORKSPACE ── */}
+      <div className="flex-1 relative w-full h-full overflow-hidden">
+        
+        {/* LEAFLET MAP CONTAINER - Always 100% full screen */}
+        <div ref={mapContainerRef} className="absolute inset-0 w-full h-full z-0 cursor-crosshair" />
 
-        {/* ── Map Canvas ── */}
-        <div ref={gridRef} onClick={handleGridClick}
-          className="flex-1 relative cursor-crosshair bg-navy-deep overflow-hidden select-none">
+        {/* Scanline Texture Overlay */}
+        <div className="absolute inset-0 pointer-events-none scanlines opacity-25 z-10" />
 
-          {/* Grid */}
-          <div className="absolute inset-0 pointer-events-none"
-            style={{ backgroundImage: `linear-gradient(to right,rgba(34,211,238,0.06) 1px,transparent 1px),linear-gradient(to bottom,rgba(34,211,238,0.06) 1px,transparent 1px)`, backgroundSize: '50px 50px' }} />
-
-          {/* Scanlines */}
-          <div className="absolute inset-0 pointer-events-none scanlines opacity-30" />
-
-          {/* ── Accurate Coastline SVG ── */}
-          <svg className="absolute inset-0 w-full h-full pointer-events-none" viewBox="0 0 1000 700" preserveAspectRatio="none">
-            <defs>
-              <filter id="coastGlow">
-                <feGaussianBlur stdDeviation="1.5" result="blur" />
-                <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
-              </filter>
-            </defs>
-            {/* Ocean fill */}
-            <rect width="1000" height="700" fill="rgba(5,11,20,0)" />
-            {/* Land masses */}
-            {COASTLINE_PATHS.map((d, i) => (
-              <path key={i} d={d}
-                fill="rgba(8, 16, 32, 0.92)"
-                stroke="rgba(34,211,238,0.28)"
-                strokeWidth="1.5"
-                filter="url(#coastGlow)"
-              />
-            ))}
-            {/* Lat/lon grid labels */}
-            {[10,14,18,22].map(lat => (
-              <text key={lat} x="8" y={(MAX_LAT - lat) / (MAX_LAT - MIN_LAT) * 700}
-                fill="rgba(100,116,139,0.6)" fontSize="10" fontFamily="JetBrains Mono" dominantBaseline="middle">
-                {lat}°N
-              </text>
-            ))}
-            {[82,86,90,94,98].map(lng => (
-              <text key={lng} x={(lng - MIN_LNG) / (MAX_LNG - MIN_LNG) * 1000} y="690"
-                fill="rgba(100,116,139,0.6)" fontSize="10" fontFamily="JetBrains Mono" textAnchor="middle">
-                {lng}°E
-              </text>
-            ))}
-          </svg>
-
-          {/* ── ARGO float markers ── */}
-          {showArgo && ARGO_FLOATS.map(f => {
-            const pos = toPercent(f.lat, f.lng);
-            return (
-              <div key={f.id} className="absolute pointer-events-none z-10"
-                style={{ left: `${pos.x}%`, top: `${pos.y}%`, transform: 'translate(-50%,-50%)' }}>
-                <div className="w-3 h-3 rounded-full bg-cyan-400/80 border border-cyan-300 shadow-glow-sm flex items-center justify-center">
-                  <div className="w-1 h-1 rounded-full bg-white" />
-                </div>
-                <div className="absolute left-4 top-0 text-[9px] font-mono text-cyan-400/80 whitespace-nowrap bg-navy-deep/80 px-1 rounded">
-                  #{f.id}
-                </div>
+        {/* ── LEFT FLOATING LAYER CONTROLS (AeroThermal.AI style) ── */}
+        <div className="absolute top-4 left-4 z-20 flex flex-col gap-2 max-w-xs">
+          <div className="glass-card p-3 rounded-xl border border-cyan-500/20 backdrop-blur-md shadow-2xl">
+            <div className="flex items-center justify-between mb-2 pb-2 border-b border-cyan-500/15">
+              <div className="flex items-center gap-1.5 text-xs font-mono text-cyan-300 font-semibold">
+                <Layers className="w-3.5 h-3.5 text-cyan-400" />
+                <span>MAP LAYERS</span>
               </div>
-            );
-          })}
-
-          {/* ── Cyclone marker ── */}
-          {showCyclone && (
-            <div className="absolute z-10 pointer-events-none"
-              style={{ left: `${cyclonePos.x}%`, top: `${cyclonePos.y}%`, transform: 'translate(-50%,-50%)' }}>
-              <div className="w-8 h-8 rounded-full border-2 border-red-500/60 flex items-center justify-center animate-spin" style={{ animationDuration: '3s' }}>
-                <div className="w-4 h-4 rounded-full border border-red-400/40" />
-              </div>
-              <div className="absolute top-9 left-1/2 -translate-x-1/2 text-[9px] font-mono text-red-400 whitespace-nowrap bg-navy-deep/90 px-1.5 py-0.5 rounded border border-red-500/30">
-                {CYCLONE_EVENT.name}
-              </div>
+              <span className="text-[9px] font-mono text-slate-400">0.25° Grid</span>
             </div>
-          )}
 
-          {/* ── Selected Point ── */}
-          {selectedPoint && (
-            <div className="absolute pointer-events-none z-20 flex items-center justify-center"
-              style={{ left: `${selectedPoint.xPercent}%`, top: `${selectedPoint.yPercent}%`, transform: 'translate(-50%,-50%)' }}>
-              <div className="absolute w-8 h-8 rounded-full border border-accent/40 sonar-ring" />
-              <div className="absolute w-14 h-14 rounded-full border border-accent/15 sonar-ring" style={{ animationDelay: '0.4s' }} />
-              <div className="w-3 h-3 rounded-full bg-accent glow-accent" />
-              <MapPin className="w-4 h-4 text-accent absolute -top-5 drop-shadow-lg" />
+            <div className="space-y-1.5 text-[11px] font-mono">
+              {/* Point Cloud Toggle */}
+              <button
+                onClick={() => setShowPointCloud((v) => !v)}
+                className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg border transition-all ${
+                  showPointCloud
+                    ? 'bg-cyan-500/15 border-cyan-400/30 text-cyan-300'
+                    : 'bg-[#050e1f]/60 border-slate-800 text-slate-400 hover:border-slate-700'
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <span className={`w-2 h-2 rounded-full ${showPointCloud ? 'bg-cyan-400 shadow-glow-sm' : 'bg-slate-600'}`}></span>
+                  <span>Thermal Point Cloud</span>
+                </div>
+                <span className="text-[9px] text-slate-400">{currentRegion.sampleGrid.length}</span>
+              </button>
+
+              {/* Heatwave Hazards */}
+              <button
+                onClick={() => {
+                  setShowHeatwave((v) => !v);
+                  if (!showHeatwave) setActiveTab('heatwave');
+                }}
+                className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg border transition-all ${
+                  showHeatwave
+                    ? 'bg-amber-500/15 border-amber-400/40 text-amber-300'
+                    : 'bg-[#050e1f]/60 border-slate-800 text-slate-400 hover:border-slate-700'
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <span className={`w-2 h-2 rounded-full ${showHeatwave ? 'bg-amber-400 shadow-glow-sm' : 'bg-slate-600'}`}></span>
+                  <span>Marine Heatwave Zones</span>
+                </div>
+                <span className="text-[9px] text-amber-400/80">{currentRegion.heatwaves.length}</span>
+              </button>
+
+              {/* Cyclone Trajectory */}
+              <button
+                onClick={() => {
+                  setShowCyclone((v) => !v);
+                  if (!showCyclone) setActiveTab('cyclone');
+                }}
+                className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg border transition-all ${
+                  showCyclone
+                    ? 'bg-rose-500/15 border-rose-400/40 text-rose-300'
+                    : 'bg-[#050e1f]/60 border-slate-800 text-slate-400 hover:border-slate-700'
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <span className={`w-2 h-2 rounded-full ${showCyclone ? 'bg-rose-400 shadow-glow-sm' : 'bg-slate-600'}`}></span>
+                  <span>Cyclone Forecast Track</span>
+                </div>
+                <span className="text-[9px] text-rose-400/80">Active</span>
+              </button>
+
+              {/* ARGO Floats */}
+              <button
+                onClick={() => {
+                  setShowArgo((v) => !v);
+                  if (!showArgo) setActiveTab('argo');
+                }}
+                className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg border transition-all ${
+                  showArgo
+                    ? 'bg-cyan-500/15 border-cyan-400/40 text-cyan-300'
+                    : 'bg-[#050e1f]/60 border-slate-800 text-slate-400 hover:border-slate-700'
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <span className={`w-2 h-2 rounded-full ${showArgo ? 'bg-cyan-400 shadow-glow-sm' : 'bg-slate-600'}`}></span>
+                  <span>In-Situ ARGO Network</span>
+                </div>
+                <span className="text-[9px] text-cyan-400/80">{currentRegion.argoFloats.length}</span>
+              </button>
             </div>
-          )}
+          </div>
         </div>
 
-        {/* ── Proto Overlay Panels ── */}
-
-        {/* Heatwave alert feed */}
-        {showHeatwave && (
-          <ProtoPanel title="Marine Heatwave Alerts" icon={<Thermometer className="w-4 h-4 text-amber-400" />} onClose={() => setShowHeatwave(false)}>
-            <div className="space-y-2 mt-3">
-              {HEATWAVE_ALERTS.map(a => (
-                <div key={a.id} className={`p-3 rounded-lg border ${severityColor(a.severity)} glass-card`}>
-                  <div className="flex justify-between items-start mb-1">
-                    <span className="font-mono text-[10px] text-text-muted">{a.date}</span>
-                    <span className={`text-[9px] font-mono uppercase px-1.5 py-0.5 rounded border ${severityColor(a.severity)}`}>{a.severity}</span>
-                  </div>
-                  <div className="text-xs font-medium text-text-heading">{a.region}</div>
-                  <div className="flex gap-3 mt-1 text-[10px] font-mono text-text-muted">
-                    <span>ΔSST <span className="text-amber-400">{a.delta}</span></span>
-                    <span>Duration <span className="text-text-body">{a.duration}</span></span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </ProtoPanel>
-        )}
-
-        {/* Cyclone info */}
-        {showCyclone && (
-          <ProtoPanel title="Storm / Cyclone Overlay" icon={<Wind className="w-4 h-4 text-red-400" />} onClose={() => setShowCyclone(false)}>
-            <div className="mt-3 glass-card rounded-lg p-4 border border-red-500/20">
-              <div className="text-xs font-semibold text-text-heading mb-3">{CYCLONE_EVENT.name}</div>
-              <div className="space-y-2 text-[11px] font-mono">
-                {[['Status', CYCLONE_EVENT.status], ['Position', `${CYCLONE_EVENT.lat}°N, ${CYCLONE_EVENT.lng}°E`], ['Max Wind', CYCLONE_EVENT.maxWind]].map(([k,v]) => (
-                  <div key={k} className="flex justify-between">
-                    <span className="text-text-muted">{k}</span>
-                    <span className="text-text-heading">{v}</span>
-                  </div>
-                ))}
+        {/* ── FLOATING RIGHT INSPECTOR DRAWER (Does NOT push or squeeze the map!) ── */}
+        {!isPanelCollapsed && (
+          <aside className="absolute right-4 top-4 bottom-4 w-80 md:w-[26rem] z-20 glass-card rounded-2xl border border-cyan-500/30 flex flex-col overflow-hidden shadow-2xl backdrop-blur-xl">
+            
+            {/* Header Tabs */}
+            <div className="bg-[#050d1e]/90 p-2 border-b border-cyan-500/20 flex items-center justify-between shrink-0">
+              <div className="flex gap-1 overflow-x-auto py-0.5 scrollbar-none">
+                <button
+                  onClick={() => setActiveTab('inspect')}
+                  className={`px-2.5 py-1 rounded-lg text-[10px] font-mono transition-all whitespace-nowrap ${
+                    activeTab === 'inspect'
+                      ? 'bg-cyan-500/25 text-cyan-300 border border-cyan-400/40 font-bold shadow-glow-sm'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  Inspection
+                </button>
+                <button
+                  onClick={() => setActiveTab('heatwave')}
+                  className={`px-2.5 py-1 rounded-lg text-[10px] font-mono transition-all whitespace-nowrap ${
+                    activeTab === 'heatwave'
+                      ? 'bg-amber-500/25 text-amber-300 border border-amber-400/40 font-bold'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  Heatwave ({currentRegion.heatwaves.length})
+                </button>
+                <button
+                  onClick={() => setActiveTab('cyclone')}
+                  className={`px-2.5 py-1 rounded-lg text-[10px] font-mono transition-all whitespace-nowrap ${
+                    activeTab === 'cyclone'
+                      ? 'bg-rose-500/25 text-rose-300 border border-rose-400/40 font-bold'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  Cyclone
+                </button>
+                <button
+                  onClick={() => setActiveTab('argo')}
+                  className={`px-2.5 py-1 rounded-lg text-[10px] font-mono transition-all whitespace-nowrap ${
+                    activeTab === 'argo'
+                      ? 'bg-cyan-500/25 text-cyan-300 border border-cyan-400/40 font-bold'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  ARGO ({currentRegion.argoFloats.length})
+                </button>
+                <button
+                  onClick={() => setActiveTab('export')}
+                  className={`px-2 py-1 rounded-lg text-[10px] font-mono transition-all whitespace-nowrap ${
+                    activeTab === 'export'
+                      ? 'bg-slate-700/60 text-white border border-slate-500'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  API
+                </button>
               </div>
-              <div className="mt-3 text-[9px] text-red-400/70 font-mono border-t border-red-500/20 pt-2">
-                Static sample marker — real NWP feed not connected
-              </div>
-            </div>
-          </ProtoPanel>
-        )}
 
-        {/* ARGO explorer */}
-        {showArgo && (
-          <ProtoPanel title="ARGO Float Explorer" icon={<Anchor className="w-4 h-4 text-accent" />} onClose={() => setShowArgo(false)}>
-            <div className="space-y-2 mt-3 max-h-72 overflow-y-auto pr-1">
-              {ARGO_FLOATS.map(f => (
-                <div key={f.id} className="glass-card rounded-lg p-3 border border-navy-border">
-                  <div className="flex justify-between items-center mb-2">
-                    <span className="font-mono text-xs text-accent font-semibold">#{f.id}</span>
-                    <span className="text-[9px] font-mono text-text-muted">{f.cycles} cycles</span>
-                  </div>
-                  <div className="text-[10px] font-mono space-y-1 text-text-body">
-                    <div>Position: <span className="text-text-heading">{f.lat}°N, {f.lng}°E</span></div>
-                    <div>Last profile: <span className="text-text-heading">{f.lastProfile}</span></div>
-                    <div>Max depth: <span className="text-accent">{f.depth} m</span></div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </ProtoPanel>
-        )}
-
-        {/* Export / API panel */}
-        {showExport && (
-          <ProtoPanel title="Export / API Access" icon={<Download className="w-4 h-4 text-text-muted" />} onClose={() => setShowExport(false)}>
-            <div className="mt-3 space-y-3">
-              {[
-                { label: 'REST Endpoint', value: 'GET /api/v1/profile?lat={lat}&lon={lon}&date={date}' },
-                { label: 'Bulk Export', value: 'GET /api/v1/bulk?region=BoB&format=netcdf' },
-              ].map(ep => (
-                <div key={ep.label} className="glass-card rounded-lg p-3 border border-navy-border">
-                  <div className="text-[10px] font-mono text-text-muted mb-1">{ep.label}</div>
-                  <div className="text-[10px] font-mono text-accent bg-navy-deep/60 p-2 rounded break-all">{ep.value}</div>
-                </div>
-              ))}
-              <div className="text-[9px] font-mono text-text-muted/60 border-t border-navy-border pt-2">
-                API not live — mockup only. Contact team for access.
-              </div>
-            </div>
-          </ProtoPanel>
-        )}
-
-        {/* ── Point Inspection Panel ── */}
-        {selectedPoint && activeVars && !showHeatwave && !showCyclone && !showArgo && !showExport && (
-          <aside className="w-72 glass-panel border-l border-navy-border flex flex-col p-5 z-20">
-            <div className="flex items-center justify-between pb-3 border-b border-navy-border mb-4">
-              <div className="flex items-center gap-2">
-                <Layers className="w-4 h-4 text-accent" />
-                <span className="text-[11px] font-mono uppercase tracking-wider text-text-heading font-semibold">Point Inspection</span>
-              </div>
-              <button onClick={() => setSelectedPoint(null)} className="text-text-muted hover:text-text-heading p-0.5 transition-colors">
-                <X className="w-3.5 h-3.5" />
-              </button>
-            </div>
-
-            {/* Coordinates */}
-            <div className="bg-navy-deep/80 p-3 rounded-lg border border-navy-border mb-4 glow-accent-sm">
-              <div className="text-[9px] font-mono text-text-muted uppercase mb-1">Target Coordinates</div>
-              <div className="font-mono text-sm text-accent font-bold text-glow">
-                {selectedPoint.lat.toFixed(4)}° N<br />{selectedPoint.lng.toFixed(4)}° E
-              </div>
-            </div>
-
-            {/* Surface vars */}
-            <div className="space-y-2 flex-1">
-              <div className="text-[9px] font-mono text-text-muted uppercase tracking-wider mb-2">Surface Variables</div>
-              {[
-                ['SST',     activeVars.sst,     '°C'],
-                ['SSS',     activeVars.sss,     'PSU'],
-                ['SSH',     activeVars.ssh,     'm'],
-                ['Current', activeVars.current, 'm/s'],
-                ['Wind',    activeVars.wind,    'm/s'],
-              ].map(([label, val, unit]) => (
-                <div key={label} className="glass-card flex items-center justify-between py-2 px-3 rounded-lg border border-navy-border/60">
-                  <span className="text-[11px] text-text-body">{label}</span>
-                  <span className="font-mono text-xs text-accent font-semibold">{val} {unit}</span>
-                </div>
-              ))}
-            </div>
-
-            {/* CTA */}
-            <div className="pt-4 border-t border-navy-border mt-4">
               <button
-                onClick={() => onExploreProfile && onExploreProfile(selectedPoint.lat, selectedPoint.lng)}
-                className="btn-accent w-full py-2.5 px-4 rounded-lg text-xs flex items-center justify-center gap-2">
-                <span>Explore Profile</span>
-                <ChevronRight className="w-3.5 h-3.5" />
+                onClick={() => setIsPanelCollapsed(true)}
+                className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition-colors ml-1"
+                title="Collapse Panel"
+              >
+                <ChevronRight className="w-4 h-4" />
               </button>
+            </div>
+
+            {/* Tab Contents */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-4 text-xs font-mono">
+              
+              {/* ── TAB 1: POINT INSPECTION ── */}
+              {activeTab === 'inspect' && (
+                <div className="space-y-4">
+                  {/* Coordinates Badge */}
+                  <div className="bg-[#040c1a]/90 p-3.5 rounded-xl border border-cyan-500/30 glow-accent-sm">
+                    <div className="flex items-center justify-between text-[10px] text-slate-400 uppercase tracking-widest mb-1">
+                      <span>Target Subsurface Column</span>
+                      <span className="text-cyan-400 font-bold">0 – 1000m</span>
+                    </div>
+                    <div className="text-base font-bold text-cyan-300 text-glow">
+                      {selectedPoint.lat.toFixed(4)}° N, {selectedPoint.lng.toFixed(4)}° E
+                    </div>
+                    <div className="text-[10px] text-slate-400 mt-1">
+                      Region: <span className="text-slate-200">{currentRegion.name}</span>
+                    </div>
+                  </div>
+
+                  {/* Surface Variables Readout */}
+                  <div>
+                    <div className="text-[10px] uppercase tracking-wider text-slate-400 mb-2 font-semibold">
+                      Surface Satellite Inputs (X)
+                    </div>
+                    <div className="space-y-1.5">
+                      {[
+                        ['Sea Surface Temp (SST)', `${activeVars.sst} °C`, 'OSTIA / L4'],
+                        ['Sea Surface Salinity (SSS)', `${activeVars.sss} PSU`, 'GLORYS12'],
+                        ['Sea Level Anomaly (SSH)', `${activeVars.ssh} m`, 'DUACS'],
+                        ['Current Speed (U/V)', `${activeVars.current} m/s`, 'GLORYS12'],
+                        ['Surface Winds (10m)', `${activeVars.wind} m/s`, 'CCMP V3.1'],
+                      ].map(([label, val, src]) => (
+                        <div key={label} className="flex items-center justify-between p-2.5 rounded-lg bg-[#061226]/80 border border-cyan-500/15">
+                          <div>
+                            <div className="text-[11px] text-slate-200">{label}</div>
+                            <div className="text-[9px] text-slate-500">{src}</div>
+                          </div>
+                          <span className="text-cyan-300 font-bold text-xs">{val}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Derived Inferences */}
+                  <div className="p-3 rounded-xl bg-[#061226]/80 border border-cyan-500/15">
+                    <div className="text-[10px] uppercase tracking-wider text-slate-400 mb-2 font-semibold">
+                      Physical Indicators
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 text-[10px]">
+                      <div className="p-2 rounded bg-[#030914]/80 border border-cyan-500/10">
+                        <span className="text-slate-400">Mixed Layer:</span>
+                        <div className="text-cyan-300 font-bold text-xs mt-0.5">{activeVars.mld} m</div>
+                      </div>
+                      <div className="p-2 rounded bg-[#030914]/80 border border-cyan-500/10">
+                        <span className="text-slate-400">Heat Content (OHC):</span>
+                        <div className="text-cyan-300 font-bold text-xs mt-0.5">{activeVars.ohc} kJ/cm²</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* CTA to Dive / Reconstruction */}
+                  <button
+                    onClick={() => onExploreProfile && onExploreProfile(selectedPoint.lat, selectedPoint.lng)}
+                    className="btn-accent w-full py-3 px-4 rounded-xl text-xs flex items-center justify-center gap-2 font-semibold shadow-glow-sm"
+                  >
+                    <span>Reconstruct Vertical Profile (OceanDive)</span>
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+                </div>
+              )}
+
+              {/* ── TAB 2: HEATWAVE ALERTS ── */}
+              {activeTab === 'heatwave' && (
+                <div className="space-y-3">
+                  <div className="text-[10px] text-slate-400 leading-relaxed">
+                    Areas where Sea Surface Temperature exceeds 90th percentile threshold for over 5 consecutive days.
+                  </div>
+
+                  {currentRegion.heatwaves.map((hw) => (
+                    <div
+                      key={hw.id}
+                      onClick={() => flyToCoord(hw.lat, hw.lng, 8)}
+                      className="p-3.5 rounded-xl border border-amber-500/30 bg-[#140f08]/80 hover:border-amber-400 transition-all cursor-pointer group shadow-lg"
+                    >
+                      <div className="flex justify-between items-center mb-1.5">
+                        <span className="text-[10px] text-slate-400">{hw.date}</span>
+                        <span className="text-[9px] font-bold uppercase px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                          {hw.severity}
+                        </span>
+                      </div>
+                      <div className="text-xs font-bold text-white group-hover:text-amber-300 transition-colors">
+                        {hw.region}
+                      </div>
+                      <div className="flex justify-between mt-2 pt-2 border-t border-amber-500/20 text-[10px] text-slate-300">
+                        <span>Anomaly: <b className="text-amber-400">{hw.delta}</b></span>
+                        <span>Duration: <b>{hw.duration}</b></span>
+                        <span>Radius: <b>{hw.radiusKm} km</b></span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* ── TAB 3: CYCLONE TRACKER ── */}
+              {activeTab === 'cyclone' && (
+                <div className="space-y-3">
+                  <div className="p-4 rounded-xl border border-rose-500/30 bg-[#1a080c]/80 shadow-lg">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs font-bold text-rose-300">{currentRegion.cyclone.name}</span>
+                      <span className="text-[9px] px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/40">
+                        MONITORED
+                      </span>
+                    </div>
+                    <div className="space-y-2 text-[11px]">
+                      <div className="flex justify-between border-b border-rose-500/15 pb-1">
+                        <span className="text-slate-400">Classification:</span>
+                        <span className="text-white">{currentRegion.cyclone.status}</span>
+                      </div>
+                      <div className="flex justify-between border-b border-rose-500/15 pb-1">
+                        <span className="text-slate-400">Eye Coordinates:</span>
+                        <span className="text-rose-300 font-bold">{currentRegion.cyclone.center[0]}°N, {currentRegion.cyclone.center[1]}°E</span>
+                      </div>
+                      <div className="flex justify-between border-b border-rose-500/15 pb-1">
+                        <span className="text-slate-400">Sustained Wind:</span>
+                        <span className="text-white">{currentRegion.cyclone.maxWind}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Central Pressure:</span>
+                        <span className="text-white">{currentRegion.cyclone.pressure}</span>
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={() => flyToCoord(currentRegion.cyclone.center[0], currentRegion.cyclone.center[1], 8)}
+                      className="mt-3 w-full py-2 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/40 text-rose-300 text-[10px] font-bold transition-all"
+                    >
+                      Focus Cyclone Center
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* ── TAB 4: ARGO IN-SITU FLOATS ── */}
+              {activeTab === 'argo' && (
+                <div className="space-y-2.5">
+                  <div className="text-[10px] text-slate-400 mb-2">
+                    Active floats profiling vertical temperature every 10 days for validation and truth-checking.
+                  </div>
+
+                  {currentRegion.argoFloats.map((f) => (
+                    <div
+                      key={f.id}
+                      onClick={() => flyToCoord(f.lat, f.lng, 8)}
+                      className="p-3 rounded-xl border border-cyan-500/20 bg-[#061226]/80 hover:border-cyan-400 transition-all cursor-pointer group"
+                    >
+                      <div className="flex justify-between items-center mb-1">
+                        <div className="flex items-center gap-1.5">
+                          <Anchor className="w-3 h-3 text-cyan-400" />
+                          <span className="font-bold text-xs text-cyan-300 group-hover:text-cyan-200">#{f.id}</span>
+                        </div>
+                        <span className="text-[9px] text-slate-400">{f.cycles} cycles</span>
+                      </div>
+                      <div className="text-[10px] text-slate-300 space-y-0.5">
+                        <div>Location: <span className="text-white">{f.lat}°N, {f.lng}°E</span></div>
+                        <div>Max Depth: <span className="text-cyan-400 font-bold">{f.depth}m</span></div>
+                        <div>Last Telemetry: <span className="text-slate-400">{f.lastProfile}</span></div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* ── TAB 5: API / EXPORT ── */}
+              {activeTab === 'export' && (
+                <div className="space-y-3">
+                  <div className="text-[10px] text-slate-400">
+                    Direct integration points for operational meteorological ingestion.
+                  </div>
+                  <div className="p-3 rounded-xl bg-[#061226]/80 border border-cyan-500/20 space-y-1">
+                    <span className="text-[10px] text-slate-400">NetCDF-4 Export Format</span>
+                    <div className="p-2 rounded bg-[#030914] text-[10px] text-cyan-300 font-mono break-all border border-cyan-500/10">
+                      dataset.nc [60, 57, 81, 15]
+                    </div>
+                  </div>
+                  <div className="p-3 rounded-xl bg-[#061226]/80 border border-cyan-500/20 space-y-1">
+                    <span className="text-[10px] text-slate-400">REST Inference Query</span>
+                    <div className="p-2 rounded bg-[#030914] text-[10px] text-cyan-300 font-mono break-all border border-cyan-500/10">
+                      GET /api/v1/profile?lat={selectedPoint.lat}&lon={selectedPoint.lng}&date=2024-03-15
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           </aside>
         )}
 
-        {/* When proto panels open, show inspection summary at bottom-right instead */}
-        {selectedPoint && activeVars && (showHeatwave || showCyclone || showArgo || showExport) && (
-          <div className="absolute bottom-4 right-4 z-30 glass-card rounded-lg border border-navy-border p-3 text-xs font-mono">
-            <span className="text-text-muted">Selected: </span>
-            <span className="text-accent">{selectedPoint.lat.toFixed(2)}°N {selectedPoint.lng.toFixed(2)}°E</span>
-          </div>
-        )}
+
+
       </div>
     </div>
   );
 };
-
-// ── Shared proto panel wrapper ────────────────────────────────────────────────
-const ProtoPanel: React.FC<{ title: string; icon: React.ReactNode; onClose: () => void; children: React.ReactNode }> = ({ title, icon, onClose, children }) => (
-  <aside className="w-80 glass-panel border-l border-navy-border flex flex-col p-5 z-20 overflow-y-auto">
-    <div className="flex items-center justify-between">
-      <div className="flex items-center gap-2">
-        {icon}
-        <span className="text-xs font-semibold text-text-heading">{title}</span>
-        <span className="roadmap-badge">Phase 2</span>
-      </div>
-      <button onClick={onClose} className="text-text-muted hover:text-text-heading p-0.5 transition-colors">
-        <X className="w-3.5 h-3.5" />
-      </button>
-    </div>
-    {children}
-  </aside>
-);
