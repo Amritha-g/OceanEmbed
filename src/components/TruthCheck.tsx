@@ -1,13 +1,7 @@
 import React, { useState } from 'react';
 import { ArrowLeft, ShieldCheck, Info, CheckCircle2 } from 'lucide-react';
 import {
-  ResponsiveContainer,
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  Tooltip,
-  Legend,
+  ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, Legend,
 } from 'recharts';
 
 interface TruthCheckProps {
@@ -17,224 +11,145 @@ interface TruthCheckProps {
 
 const DEPTH_LEVELS = [0, 5, 10, 20, 30, 50, 75, 100, 125, 150, 200, 300, 500, 700, 1000];
 
+type ViewMode = 'comparison' | 'prediction' | 'truth' | 'error';
+
+const METRICS = [
+  { label: 'RMSE', value: '0.42 °C' },
+  { label: 'CORR (R)', value: '0.94' },
+  { label: 'BIAS', value: '+0.12 °C' },
+  { label: 'N PROFILES', value: '47' },
+];
+
 export const TruthCheck: React.FC<TruthCheckProps> = ({ coordinates, onBackToExplorer }) => {
-  const [viewMode, setViewMode] = useState<'comparison' | 'prediction' | 'truth' | 'error'>('comparison');
+  const [viewMode, setViewMode] = useState<ViewMode>('comparison');
 
-  // Mock dataset comparing OceanEmbed Prediction vs ARGO Observation
-  const comparisonData = DEPTH_LEVELS.map((depth) => {
+  const data = DEPTH_LEVELS.map((depth) => {
     const decay = Math.exp(-depth / 180);
-    const predTemp = 4.2 + (28.5 - 4.2) * decay;
-    // ARGO observation with slight natural variance
-    const argoTemp = predTemp + Math.sin(depth / 50) * 0.35 + 0.12;
-    const absError = Math.abs(predTemp - argoTemp);
-
+    const pred = 4.2 + (28.5 - 4.2) * decay;
+    const argo = pred + Math.sin(depth / 50) * 0.35 + 0.12;
     return {
       depth,
-      prediction: Number(predTemp.toFixed(2)),
-      argo: Number(argoTemp.toFixed(2)),
-      error: Number(absError.toFixed(2)),
+      prediction: +pred.toFixed(2),
+      argo: +argo.toFixed(2),
+      error: +Math.abs(pred - argo).toFixed(2),
     };
   });
+
+  const MODES: { id: ViewMode; label: string }[] = [
+    { id: 'comparison', label: 'Comparison' },
+    { id: 'prediction', label: 'Prediction' },
+    { id: 'truth',      label: 'Ground Truth' },
+    { id: 'error',      label: 'Error' },
+  ];
 
   return (
     <div className="w-full h-screen bg-navy-deep flex flex-col overflow-hidden text-text-body select-none">
       {/* Header */}
-      <header className="h-16 glass-panel border-b border-navy-border px-6 flex items-center justify-between z-10">
+      <header className="h-14 glass-panel border-b border-navy-border px-5 flex items-center justify-between z-10 shrink-0">
         <div className="flex items-center gap-4">
-          <button
-            onClick={onBackToExplorer}
-            className="flex items-center gap-1.5 text-xs text-text-body hover:text-accent font-medium transition-colors bg-navy-deep/80 px-3 py-1.5 rounded border border-navy-border"
-          >
-            <ArrowLeft className="w-3.5 h-3.5" />
-            <span>Ocean Explorer</span>
+          <button onClick={onBackToExplorer}
+            className="flex items-center gap-1.5 text-xs text-text-body hover:text-accent font-medium transition-all bg-navy-deep/80 px-3 py-1.5 rounded-lg border border-navy-border hover:border-accent/30">
+            <ArrowLeft className="w-3.5 h-3.5" /><span>Explorer</span>
           </button>
-          <div className="h-4 w-[1px] bg-navy-border"></div>
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-mono text-text-muted">LOCATION:</span>
-            <span className="font-mono text-xs text-accent font-semibold">
-              {coordinates.lat.toFixed(4)}° N, {coordinates.lng.toFixed(4)}° E
-            </span>
-          </div>
+          <div className="h-4 w-px bg-navy-border" />
+          <span className="text-[10px] font-mono text-text-muted">LOCATION:</span>
+          <span className="font-mono text-xs text-accent font-bold text-glow">
+            {coordinates.lat.toFixed(4)}°N, {coordinates.lng.toFixed(4)}°E
+          </span>
         </div>
-
-        <div className="flex items-center gap-2 bg-navy-deep/80 px-3 py-1 rounded border border-navy-border text-[11px] font-mono text-text-muted">
-          <Info className="w-3 h-3 text-accent flex-shrink-0" />
-          <span>SYNTHETIC ARGO COMPARISON DATA</span>
+        <div className="flex items-center gap-1.5 bg-navy-deep/80 px-3 py-1 rounded-lg border border-navy-border text-[10px] font-mono text-text-muted">
+          <Info className="w-3 h-3 text-accent" /><span>SYNTHETIC ARGO COMPARISON</span>
         </div>
       </header>
 
-      {/* Main Content Area */}
-      <div className="flex-1 p-6 flex flex-col gap-6 overflow-hidden">
-        {/* Top Control Bar & View Toggle */}
-        <div className="glass-panel border border-navy-border rounded-lg p-4 flex flex-wrap items-center justify-between gap-4">
-          <div className="flex items-center gap-2">
-            <ShieldCheck className="w-5 h-5 text-accent" />
+      {/* Content */}
+      <div className="flex-1 p-5 flex flex-col gap-4 overflow-hidden">
+        {/* Control bar */}
+        <div className="glass-card border border-navy-border rounded-xl p-4 flex flex-wrap items-center justify-between gap-4 shrink-0">
+          <div className="flex items-center gap-3">
+            <div className="p-2 rounded-lg glass-card border border-navy-border shadow-glow-sm">
+              <ShieldCheck className="w-5 h-5 text-accent" />
+            </div>
             <div>
-              <h2 className="text-sm font-semibold text-text-heading font-sans">
-                Truth Check & Validation
-              </h2>
-              <p className="text-xs text-text-muted font-sans">
-                Comparative evaluation of model predictions against in-situ ARGO float observations
-              </p>
+              <h2 className="text-sm font-semibold text-text-heading">Truth Check & Validation</h2>
+              <p className="text-[11px] text-text-muted">Model prediction vs. in-situ ARGO float observations</p>
             </div>
           </div>
 
-          {/* 3-Way Mode Toggle */}
-          <div className="flex bg-navy-deep/90 p-1 rounded border border-navy-border text-xs font-mono">
-            <button
-              onClick={() => setViewMode('comparison')}
-              className={`px-3 py-1.5 rounded transition-colors ${
-                viewMode === 'comparison'
-                  ? 'bg-accent/15 text-accent border border-accent/30 font-semibold'
-                  : 'text-text-body hover:text-text-heading'
-              }`}
-            >
-              Comparison
-            </button>
-            <button
-              onClick={() => setViewMode('prediction')}
-              className={`px-3 py-1.5 rounded transition-colors ${
-                viewMode === 'prediction'
-                  ? 'bg-accent/15 text-accent border border-accent/30 font-semibold'
-                  : 'text-text-body hover:text-text-heading'
-              }`}
-            >
-              Prediction
-            </button>
-            <button
-              onClick={() => setViewMode('truth')}
-              className={`px-3 py-1.5 rounded transition-colors ${
-                viewMode === 'truth'
-                  ? 'bg-accent/15 text-accent border border-accent/30 font-semibold'
-                  : 'text-text-body hover:text-text-heading'
-              }`}
-            >
-              Ground Truth
-            </button>
-            <button
-              onClick={() => setViewMode('error')}
-              className={`px-3 py-1.5 rounded transition-colors ${
-                viewMode === 'error'
-                  ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40 font-semibold'
-                  : 'text-text-body hover:text-text-heading'
-              }`}
-            >
-              Error Mode
-            </button>
+          {/* Mode toggle */}
+          <div className="flex bg-navy-deep/80 p-0.5 rounded-xl border border-navy-border text-xs font-mono gap-0.5">
+            {MODES.map(m => (
+              <button key={m.id} onClick={() => setViewMode(m.id)}
+                className={`px-3 py-1.5 rounded-lg transition-all ${
+                  viewMode === m.id
+                    ? m.id === 'error'
+                      ? 'bg-amber-500/15 text-amber-400 border border-amber-500/30'
+                      : 'bg-accent/12 text-accent border border-accent/25 shadow-glow-sm'
+                    : 'text-text-body hover:text-text-heading'
+                }`}>
+                {m.label}
+              </button>
+            ))}
           </div>
         </div>
 
-        {/* Main Chart Card */}
-        <div className="flex-1 glass-panel border border-navy-border rounded-lg p-6 flex flex-col justify-between overflow-hidden">
-          <div className="w-full h-full relative">
+        {/* Chart */}
+        <div className="flex-1 glass-card border border-navy-border rounded-xl p-5 flex flex-col min-h-0">
+          <div className="flex-1 min-h-0">
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart
-                data={comparisonData}
-                layout="vertical"
-                margin={{ top: 10, right: 30, left: 20, bottom: 20 }}
-              >
-                <XAxis
-                  type="number"
+              <LineChart data={data} layout="vertical" margin={{ top: 5, right: 30, left: 15, bottom: 10 }}>
+                <XAxis type="number"
                   domain={viewMode === 'error' ? [0, 1.5] : [0, 32]}
-                  unit={viewMode === 'error' ? '°C Δ' : '°C'}
-                  stroke="#64748b"
-                  tick={{ fill: '#94a3b8', fontSize: 11, fontFamily: 'JetBrains Mono' }}
-                />
-                <YAxis
-                  type="number"
-                  dataKey="depth"
-                  reversed
-                  domain={[0, 1000]}
-                  unit="m"
-                  stroke="#64748b"
-                  tick={{ fill: '#94a3b8', fontSize: 11, fontFamily: 'JetBrains Mono' }}
-                />
-                <Tooltip
-                  content={({ active, payload }) => {
-                    if (active && payload && payload.length) {
-                      const data = payload[0].payload;
-                      return (
-                        <div className="bg-navy-deep/95 border border-navy-border p-3 rounded text-xs font-mono space-y-1">
-                          <div className="text-accent font-bold mb-1">Depth: {data.depth} m</div>
-                          {(viewMode === 'comparison' || viewMode === 'prediction') && (
-                            <div className="text-accent">OceanEmbed: {data.prediction} °C</div>
-                          )}
-                          {(viewMode === 'comparison' || viewMode === 'truth') && (
-                            <div className="text-slate-300">ARGO Observed: {data.argo} °C</div>
-                          )}
-                          {viewMode === 'error' && (
-                            <div className="text-amber-400">Absolute Error: {data.error} °C</div>
-                          )}
-                        </div>
-                      );
-                    }
-                    return null;
-                  }}
-                />
-                <Legend
-                  wrapperStyle={{ paddingTop: '10px', fontFamily: 'Inter', fontSize: '12px' }}
-                />
-
-                {/* Conditional Lines depending on 3-way toggle */}
+                  unit={viewMode === 'error' ? ' Δ°C' : '°C'}
+                  stroke="#334155"
+                  tick={{ fill: '#94a3b8', fontSize: 10, fontFamily: 'JetBrains Mono' }} />
+                <YAxis type="number" dataKey="depth" reversed domain={[0, 1000]} unit="m" stroke="#334155"
+                  tick={{ fill: '#94a3b8', fontSize: 10, fontFamily: 'JetBrains Mono' }} />
+                <Tooltip content={({ active, payload }) => {
+                  if (!active || !payload?.length) return null;
+                  const d = payload[0].payload;
+                  return (
+                    <div className="bg-navy-deep/95 border border-navy-border p-3 rounded-lg text-xs font-mono shadow-glow-sm space-y-1">
+                      <div className="text-accent font-bold">Depth: {d.depth} m</div>
+                      {(viewMode === 'comparison' || viewMode === 'prediction') && <div className="text-accent">OceanEmbed: {d.prediction} °C</div>}
+                      {(viewMode === 'comparison' || viewMode === 'truth') && <div className="text-slate-300">ARGO: {d.argo} °C</div>}
+                      {viewMode === 'error' && <div className="text-amber-400">Error: {d.error} °C</div>}
+                    </div>
+                  );
+                }} />
+                <Legend wrapperStyle={{ paddingTop: 8, fontFamily: 'Inter', fontSize: 11, color: '#94a3b8' }} />
                 {(viewMode === 'comparison' || viewMode === 'prediction') && (
-                  <Line
-                    name="OceanEmbed Prediction"
-                    type="monotone"
-                    dataKey="prediction"
-                    stroke="#22d3ee"
-                    strokeWidth={2.5}
-                    dot={{ r: 3.5, fill: '#22d3ee' }}
-                  />
+                  <Line name="OceanEmbed Prediction" type="monotone" dataKey="prediction"
+                    stroke="#22d3ee" strokeWidth={2.5} dot={{ r: 3, fill: '#22d3ee', strokeWidth: 0 }}
+                    activeDot={{ r: 5, fill: '#f0f9ff', stroke: '#22d3ee', strokeWidth: 2 }} />
                 )}
-
                 {(viewMode === 'comparison' || viewMode === 'truth') && (
-                  <Line
-                    name="ARGO Observation"
-                    type="monotone"
-                    dataKey="argo"
-                    stroke="#94a3b8"
-                    strokeDasharray="4 4"
-                    strokeWidth={2}
-                    dot={{ r: 3.5, fill: '#94a3b8' }}
-                  />
+                  <Line name="ARGO Observation" type="monotone" dataKey="argo"
+                    stroke="#94a3b8" strokeDasharray="5 4" strokeWidth={2}
+                    dot={{ r: 3, fill: '#94a3b8', strokeWidth: 0 }} />
                 )}
-
                 {viewMode === 'error' && (
-                  <Line
-                    name="Per-Depth Error (|Prediction - ARGO|)"
-                    type="monotone"
-                    dataKey="error"
-                    stroke="#f59e0b"
-                    strokeWidth={2.5}
-                    dot={{ r: 4, fill: '#f59e0b' }}
-                  />
+                  <Line name="Per-Depth Error |Pred − ARGO|" type="monotone" dataKey="error"
+                    stroke="#f59e0b" strokeWidth={2.5}
+                    dot={{ r: 4, fill: '#f59e0b', strokeWidth: 0 }} />
                 )}
               </LineChart>
             </ResponsiveContainer>
           </div>
 
-          {/* Validation Metrics Row */}
-          <div className="mt-4 pt-4 border-t border-navy-border flex flex-wrap items-center justify-between gap-4">
-            <div className="flex items-center gap-6">
-              <div className="bg-navy-deep/80 px-4 py-2 rounded border border-navy-border flex flex-col">
-                <span className="text-[10px] font-mono text-text-muted">RMSE</span>
-                <span className="font-mono text-sm text-accent font-semibold">0.42 °C</span>
-              </div>
-
-              <div className="bg-navy-deep/80 px-4 py-2 rounded border border-navy-border flex flex-col">
-                <span className="text-[10px] font-mono text-text-muted">CORRELATION (R)</span>
-                <span className="font-mono text-sm text-accent font-semibold">0.94</span>
-              </div>
-
-              <div className="bg-navy-deep/80 px-4 py-2 rounded border border-navy-border flex flex-col">
-                <span className="text-[10px] font-mono text-text-muted">BIAS</span>
-                <span className="font-mono text-sm text-accent font-semibold">+0.12 °C</span>
-              </div>
+          {/* Metrics row */}
+          <div className="mt-4 pt-4 border-t border-navy-border flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-3 flex-wrap">
+              {METRICS.map(m => (
+                <div key={m.label} className="glass-card px-4 py-2 rounded-lg border border-navy-border flex flex-col">
+                  <span className="text-[9px] font-mono text-text-muted">{m.label}</span>
+                  <span className="font-mono text-sm text-accent font-semibold text-glow">{m.value}</span>
+                </div>
+              ))}
             </div>
-
-            <div className="flex items-center gap-2 text-xs font-mono text-text-muted">
-              <CheckCircle2 className="w-4 h-4 text-accent" />
-              <span>Validated against independent ARGO gridded observations</span>
+            <div className="flex items-center gap-1.5 text-[11px] font-mono text-text-muted">
+              <CheckCircle2 className="w-3.5 h-3.5 text-accent" />
+              Validated against independent ARGO gridded obs.
             </div>
           </div>
         </div>
