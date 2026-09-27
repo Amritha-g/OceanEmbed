@@ -105,16 +105,13 @@ temp15 = load_temperature()
 # Align time axes (all should be identical after loading)
 time = sst.time
 
-print("Assembling X …")
-# Stack inputs: (time, lat, lon, 7)
-# Wind U/V: we use surface currents as proxy since CCMP download was replaced
-# by GLORYS surface currents (uo/vo already included);
-# for wind we add zero-filled placeholders — will be replaced when real winds arrive
-wind_u = xr.zeros_like(uo)
-wind_v = xr.zeros_like(vo)
-wind_u.attrs["note"] = "placeholder — replace with CCMP/ASCAT winds"
-wind_v.attrs["note"] = "placeholder — replace with CCMP/ASCAT winds"
+print("Loading CCMP winds …")
+ds_wind = xr.open_dataset(RAW / "ccmp_winds.nc")
+# Regrid from CCMP 0.25° grid (lat: 8-22, lon: 80-100) to target grid
+wind_u = regrid(ds_wind["uwnd"], TARGET_LATS, TARGET_LONS)
+wind_v = regrid(ds_wind["vwnd"], TARGET_LATS, TARGET_LONS)
 
+print("Assembling X …")
 X_vars = xr.Dataset({
     "sst":    sst.reindex(time=time),
     "sss":    sss.reindex(time=time),
