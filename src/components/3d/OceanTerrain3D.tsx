@@ -1,5 +1,6 @@
 import React, { useRef, useMemo } from 'react';
-import { Canvas, useFrame } from '@react-three/fiber';
+import { useFrame } from '@react-three/fiber';
+import { SafeCanvas } from './SafeCanvas';
 import * as THREE from 'three';
 
 const OceanWaveMesh: React.FC<{ activeTarget: string }> = ({ activeTarget: _activeTarget }) => {
@@ -89,7 +90,8 @@ const OceanWaveMesh: React.FC<{ activeTarget: string }> = ({ activeTarget: _acti
 export const OceanTerrain3D: React.FC<{ activeTarget: string }> = ({ activeTarget }) => {
   return (
     <div className="w-full h-full absolute inset-0 pointer-events-none">
-      <Canvas
+      <SafeCanvas
+        fallback={<div className="w-full h-full bg-[radial-gradient(ellipse_at_bottom,rgba(34,211,238,0.12),transparent_70%)]" />}
         camera={{ position: [0, -3.2, 5.2], fov: 48 }}
         gl={{ antialias: true, alpha: true }}
       >
@@ -98,7 +100,7 @@ export const OceanTerrain3D: React.FC<{ activeTarget: string }> = ({ activeTarge
         <pointLight position={[-3, -2, 2]} intensity={2.0} color="#06b6d4" />
         <pointLight position={[2, 0, 1]} intensity={activeTarget === 'WP3' ? 4.0 : 1.5} color="#ef4444" />
         <OceanWaveMesh activeTarget={activeTarget} />
-      </Canvas>
+      </SafeCanvas>
     </div>
   );
 };

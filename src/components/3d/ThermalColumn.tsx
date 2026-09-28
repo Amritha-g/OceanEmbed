@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { Canvas } from '@react-three/fiber';
+import { SafeCanvas } from './SafeCanvas';
 import { OrbitControls } from '@react-three/drei';
 import { DEPTH_LEVELS } from '../../utils/oceanPhysics';
 
@@ -28,7 +28,14 @@ export const ThermalColumn: React.FC<ThermalColumnProps> = ({ temperatures }) =>
 
   return (
     <div className="w-full h-full min-h-[280px] rounded-xl overflow-hidden bg-[#030914] border border-navy-border">
-      <Canvas camera={{ position: [4.2, 0.4, 5.2], fov: 42 }}>
+      <SafeCanvas
+        camera={{ position: [4.2, 0.4, 5.2], fov: 42 }}
+        fallback={
+          <div className="w-full h-full flex items-center justify-center text-[11px] font-mono text-text-muted p-4 text-center">
+            3D view unavailable: WebGL is disabled in this browser
+          </div>
+        }
+      >
         <color attach="background" args={['#030914']} />
         <ambientLight intensity={0.55} />
         <pointLight position={[4, 6, 4]} intensity={1.2} color="#67e8f9" />
@@ -50,7 +57,7 @@ export const ThermalColumn: React.FC<ThermalColumnProps> = ({ temperatures }) =>
           <meshBasicMaterial color="#164e63" transparent opacity={0.35} />
         </mesh>
         <OrbitControls enablePan={false} minDistance={4} maxDistance={9} />
-      </Canvas>
+      </SafeCanvas>
     </div>
   );
 };
