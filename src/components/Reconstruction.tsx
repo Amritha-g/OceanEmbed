@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { ArrowLeft, Cpu, Layers, Sparkles, Database, CheckCircle2, Sliders, Radio } from 'lucide-react';
 import { getSurfaceInputs, getDepthProfile } from '../utils/oceanPhysics';
 import { useNeuralProfile } from '../hooks/useNeuralProfile';
+import { useModelMetrics } from '../hooks/useModelMetrics';
 
 interface ReconstructionProps {
   coordinates: { lat: number; lng: number };
@@ -13,9 +14,13 @@ export const Reconstruction: React.FC<ReconstructionProps> = ({ coordinates, onB
   const [selectedChannel, setSelectedChannel] = useState<string>('sst');
   const [activeEmbeddingLayer, setActiveEmbeddingLayer] = useState<number>(2);
 
-  const surface = getSurfaceInputs(coordinates.lat, coordinates.lng, 'bob');
   const physicsProfile = getDepthProfile(coordinates.lat, coordinates.lng, 'bob');
   const { result, status } = useNeuralProfile(coordinates.lat, coordinates.lng, 'bob');
+  const { metrics } = useModelMetrics();
+  // Real satellite inputs at the snapped grid cell when the model is live, otherwise the synthetic estimate
+  const surface = result?.surface ?? getSurfaceInputs(coordinates.lat, coordinates.lng, 'bob');
+  const testRmse = metrics?.validation?.overall.rmse ?? result?.model.test_rmse_c;
+  const params = metrics?.model.parameters ?? result?.model.parameters;
 
   const inputChannels = [
     { id: 'sst', name: 'SST (OSTIA)', value: surface.sst.toFixed(2), unit: '°C', desc: 'Operational Sea Surface Temp', color: 'text-cyan-400', border: 'border-cyan-500/30' },
@@ -61,7 +66,9 @@ export const Reconstruction: React.FC<ReconstructionProps> = ({ coordinates, onB
           </span>
           <div className="flex items-center gap-1.5 bg-accent/10 border border-accent/30 px-3 py-1 rounded-lg text-[10px] font-mono text-accent">
             <Cpu className="w-3 h-3" />
-            <span>INFERENCE: 11.4 ms | RMSE: 0.214°C</span>
+            <span>
+              {result?.date ? `${result.date} | ` : ''}TEST RMSE: {testRmse !== undefined && testRmse !== null ? `${testRmse.toFixed(3)}°C` : '—'}
+            </span>
           </div>
         </div>
       </div>
@@ -173,7 +180,8 @@ export const Reconstruction: React.FC<ReconstructionProps> = ({ coordinates, onB
 
                 <div className="grid grid-cols-8 gap-1.5 py-2">
                   {Array.from({ length: 32 }).map((_, i) => {
-                    const embVal = result?.embedding?.[i];
+                    const emb = result?.embedding;
+                    const embVal = emb?.length ? emb[((activeEmbeddingLayer - 1) * 32 + i) % emb.length] : undefined;
                     const weight = embVal !== undefined
                       ? (Math.min(1, Math.max(0, (embVal + 2) / 4))).toFixed(2)
                       : (Math.sin(i * 0.4 + activeEmbeddingLayer) * 0.5 + 0.5).toFixed(2);
@@ -195,15 +203,15 @@ export const Reconstruction: React.FC<ReconstructionProps> = ({ coordinates, onB
               <div className="p-3 rounded-lg bg-navy-deep/60 border border-navy-border/60 text-[11px] font-mono text-text-muted space-y-1">
                 <div className="flex justify-between">
                   <span>ARCHITECTURE:</span>
-                  <span className="text-accent font-semibold">ConvNeXt-ResNet + MLP</span>
+                  <span className="text-accent font-semibold">Residual U-Net + MLP</span>
                 </div>
                 <div className="flex justify-between">
                   <span>PARAMETERS:</span>
-                  <span className="text-text-heading font-semibold">522,863 Weights</span>
+                  <span className="text-text-heading font-semibold">{params ? `${params.toLocaleString()} Weights` : '—'}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span>VAL RMSE (80 EPOCHS):</span>
-                  <span className="text-emerald-400 font-semibold font-mono">0.2144 °C</span>
+                  <span>TEST RMSE (HELD-OUT DAYS):</span>
+                  <span className="text-emerald-400 font-semibold font-mono">{testRmse !== undefined && testRmse !== null ? `${testRmse.toFixed(4)} °C` : '—'}</span>
                 </div>
               </div>
             </div>

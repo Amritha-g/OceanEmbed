@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
 import { ActiveRegion } from '../utils/oceanPhysics';
-import { reconstructPoint, ReconstructResponse } from '../utils/api';
+import { DEFAULT_DATE, fetchProfile, ReconstructResponse } from '../utils/api';
 
 export type NeuralStatus = 'idle' | 'loading' | 'live' | 'offline';
 
-export function useNeuralProfile(lat: number, lng: number, region: ActiveRegion) {
+export function useNeuralProfile(lat: number, lng: number, region?: ActiveRegion, date = DEFAULT_DATE) {
   const [result, setResult] = useState<ReconstructResponse | null>(null);
   const [status, setStatus] = useState<NeuralStatus>('idle');
   const [error, setError] = useState<string | null>(null);
@@ -13,7 +13,7 @@ export function useNeuralProfile(lat: number, lng: number, region: ActiveRegion)
     let cancelled = false;
     setStatus('loading');
     setError(null);
-    reconstructPoint(lat, lng, region)
+    fetchProfile(lat, lng, region, date)
       .then((r: ReconstructResponse) => {
         if (cancelled) return;
         setResult(r);
@@ -28,7 +28,7 @@ export function useNeuralProfile(lat: number, lng: number, region: ActiveRegion)
     return () => {
       cancelled = true;
     };
-  }, [lat, lng, region]);
+  }, [lat, lng, region, date]);
 
   return { result, status, error };
 }

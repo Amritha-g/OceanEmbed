@@ -42,3 +42,6 @@ data/raw/
 # Python cache
 __pycache__/
 *.pyc
+
+# Python virtualenv
+.venv/

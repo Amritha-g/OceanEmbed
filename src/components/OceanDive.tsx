@@ -8,7 +8,9 @@ import {
   REGION_CONFIGS,
   getPhysicalVariables,
   getDepthProfile,
+  mixedLayerDepth,
 } from '../utils/oceanPhysics';
+import { useNeuralProfile } from '../hooks/useNeuralProfile';
 
 interface OceanDiveProps {
   coordinates: { lat: number; lng: number };
@@ -27,8 +29,27 @@ export const OceanDive: React.FC<OceanDiveProps> = ({
   const [activeMetric, setActiveMetric] = useState<'temp' | 'salinity'>('temp');
 
   const regionData = REGION_CONFIGS[region];
-  const activeVars = getPhysicalVariables(coordinates.lat, coordinates.lng, region);
-  const profileData = getDepthProfile(coordinates.lat, coordinates.lng, region);
+  const physicsVars = getPhysicalVariables(coordinates.lat, coordinates.lng, region);
+  const physicsProfile = getDepthProfile(coordinates.lat, coordinates.lng, region);
+  const { result, status } = useNeuralProfile(coordinates.lat, coordinates.lng, region);
+  const live = status === 'live' && result !== null;
+
+  // Temperature and its ±1σ band come from the neural model when the API is up; salinity stays physics-based
+  const profileData = live
+    ? physicsProfile.map((pt, i) => ({
+        ...pt,
+        temp: Number(result.temperatures[i].toFixed(2)),
+        ci: Number((result.uncertainty_c?.[i] ?? pt.ci).toFixed(2)),
+      }))
+    : physicsProfile;
+  const activeVars = live
+    ? {
+        ...physicsVars,
+        sst: result.surface.sst.toFixed(2),
+        sss: result.surface.sss.toFixed(2),
+        mld: mixedLayerDepth(result.depths_m, result.temperatures),
+      }
+    : physicsVars;
 
   const currentLevel = profileData[selectedDepthIndex];
 
@@ -107,7 +128,7 @@ export const OceanDive: React.FC<OceanDiveProps> = ({
 
           <div className="flex items-center gap-1.5 bg-accent/5 border border-accent/20 px-3 py-1 rounded-lg text-[10px] font-mono text-accent">
             <Info className="w-3 h-3" />
-            <span>PHYSICALLY SYNCHRONIZED</span>
+            <span>{live ? `NEURAL MODEL · ${result.date}` : 'PHYSICS ENGINE (API OFFLINE)'}</span>
           </div>
         </div>
       </header>

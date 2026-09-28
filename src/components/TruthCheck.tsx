@@ -9,6 +9,7 @@ import {
   getDepthProfile,
   getPhysicalVariables,
 } from '../utils/oceanPhysics';
+import { useNeuralProfile } from '../hooks/useNeuralProfile';
 
 interface TruthCheckProps {
   coordinates: { lat: number; lng: number };
@@ -30,27 +31,46 @@ export const TruthCheck: React.FC<TruthCheckProps> = ({
   const activeFloat = regionData.argoFloats[0];
   const activeVars = getPhysicalVariables(coordinates.lat, coordinates.lng, region);
   const rawProfile = getDepthProfile(coordinates.lat, coordinates.lng, region);
+  const { result, status } = useNeuralProfile(coordinates.lat, coordinates.lng, region);
+  const truth = status === 'live' ? result?.truth : null;
+  const live = !!truth && !!result;
 
-  const data = rawProfile.map((pt) => ({
-    depth: pt.depth,
-    prediction: pt.temp,
-    argo: pt.argoTemp,
-    error: pt.tempError,
-  }));
+  // Live: model prediction vs. GLORYS12 reanalysis at the same grid cell and day (levels above the seafloor).
+  // Offline: physics-engine profile vs. a simulated float.
+  const data = live
+    ? result.depths_m.flatMap((depth, i) => {
+        const t = truth[i];
+        if (t === null) return [];
+        const prediction = Number(result.temperatures[i].toFixed(2));
+        return [{ depth, prediction, argo: t, error: Number(Math.abs(prediction - t).toFixed(3)) }];
+      })
+    : rawProfile.map((pt) => ({
+        depth: pt.depth,
+        prediction: pt.temp,
+        argo: pt.argoTemp,
+        error: pt.tempError,
+      }));
+  const truthLabel = live ? 'GLORYS12 Reanalysis' : `Simulated ARGO #${activeFloat.id}`;
 
-  // Calculate dynamic statistical validation metrics
-  const totalErrorSq = data.reduce((acc, curr) => acc + Math.pow(curr.prediction - curr.argo, 2), 0);
-  const rmse = Math.sqrt(totalErrorSq / data.length).toFixed(2);
-  const totalBias = data.reduce((acc, curr) => acc + (curr.prediction - curr.argo), 0);
-  const bias = (totalBias / data.length).toFixed(2);
-  const corr = (0.95 + Math.sin(coordinates.lat + coordinates.lng) * 0.02).toFixed(2);
+  // Validation statistics over the plotted levels
+  const n = Math.max(1, data.length);
+  const rmse = Math.sqrt(data.reduce((acc, d) => acc + (d.prediction - d.argo) ** 2, 0) / n).toFixed(3);
+  const bias = (data.reduce((acc, d) => acc + (d.prediction - d.argo), 0) / n).toFixed(3);
+  const meanP = data.reduce((a, d) => a + d.prediction, 0) / n;
+  const meanT = data.reduce((a, d) => a + d.argo, 0) / n;
+  const cov = data.reduce((a, d) => a + (d.prediction - meanP) * (d.argo - meanT), 0);
+  const varP = data.reduce((a, d) => a + (d.prediction - meanP) ** 2, 0);
+  const varT = data.reduce((a, d) => a + (d.argo - meanT) ** 2, 0);
+  const corr = (cov / Math.sqrt(varP * varT || 1)).toFixed(4);
 
   const dynamicMetrics = [
-    { label: 'SURFACE SST', value: `${activeVars.sst} °C` },
+    { label: 'SURFACE SST', value: `${live ? result.surface.sst.toFixed(2) : activeVars.sst} °C` },
     { label: 'RMSE', value: `${rmse} °C` },
     { label: 'CORR (R)', value: corr },
     { label: 'BIAS', value: `${+bias >= 0 ? '+' : ''}${bias} °C` },
-    { label: 'ACTIVE ARGO', value: `#${activeFloat.id}` },
+    live
+      ? { label: 'GRID CELL', value: `${result.grid_point?.lat.toFixed(2)}°N ${result.grid_point?.lng.toFixed(2)}°E` }
+      : { label: 'ACTIVE ARGO', value: `#${activeFloat.id}` },
   ];
 
   const MODES: { id: ViewMode; label: string }[] = [
@@ -93,12 +113,12 @@ export const TruthCheck: React.FC<TruthCheckProps> = ({
         <div className="flex items-center gap-2">
           <div className="flex items-center gap-1.5 bg-navy-deep/80 px-3 py-1 rounded-lg border border-navy-border text-[10px] font-mono text-slate-300">
             <Anchor className="w-3 h-3 text-cyan-400" />
-            <span>IN-SITU FLOAT WMO #{activeFloat.id}</span>
+            <span>{live ? `GLORYS12 · ${result.date}` : `IN-SITU FLOAT WMO #${activeFloat.id}`}</span>
           </div>
 
           <div className="flex items-center gap-1.5 bg-accent/5 px-3 py-1 rounded-lg border border-accent/25 text-[10px] font-mono text-accent">
             <Info className="w-3 h-3 text-accent" />
-            <span>SYNCHRONIZED OBS</span>
+            <span>{live ? 'NEURAL MODEL LIVE' : 'API OFFLINE · SIMULATED'}</span>
           </div>
         </div>
       </header>
@@ -119,7 +139,9 @@ export const TruthCheck: React.FC<TruthCheckProps> = ({
                 </span>
               </div>
               <p className="text-[11px] text-text-muted">
-                OceanEmbed neural reconstruction vs. actual in-situ CTD profiles from ARGO float #{activeFloat.id}
+                {live
+                  ? `OceanEmbed neural reconstruction vs. GLORYS12 reanalysis at the nearest ocean cell (${result.date}, seafloor ≈ ${result.seafloor_depth_m} m)`
+                  : `Physics-engine profile vs. simulated ARGO float #${activeFloat.id} (start the API for real validation)`}
               </p>
             </div>
           </div>
@@ -155,7 +177,7 @@ export const TruthCheck: React.FC<TruthCheckProps> = ({
               >
                 <XAxis
                   type="number"
-                  domain={viewMode === 'error' ? [0, 1.2] : [0, 32]}
+                  domain={viewMode === 'error' ? [0, 'auto'] : [0, 32]}
                   unit={viewMode === 'error' ? ' Δ°C' : '°C'}
                   stroke="#334155"
                   tick={{ fill: '#94a3b8', fontSize: 10, fontFamily: 'JetBrains Mono' }}
@@ -180,7 +202,7 @@ export const TruthCheck: React.FC<TruthCheckProps> = ({
                           <div className="text-cyan-300">OceanEmbed: {d.prediction} °C</div>
                         )}
                         {(viewMode === 'comparison' || viewMode === 'truth') && (
-                          <div className="text-slate-300">ARGO Float #{activeFloat.id}: {d.argo} °C</div>
+                          <div className="text-slate-300">{truthLabel}: {d.argo} °C</div>
                         )}
                         {viewMode === 'error' && (
                           <div className="text-amber-400">Residual Error: {d.error} °C</div>
@@ -205,7 +227,7 @@ export const TruthCheck: React.FC<TruthCheckProps> = ({
                 )}
                 {(viewMode === 'comparison' || viewMode === 'truth') && (
                   <Line
-                    name={`ARGO Ground Truth (#${activeFloat.id})`}
+                    name={`Ground Truth (${truthLabel})`}
                     type="monotone"
                     dataKey="argo"
                     stroke="#94a3b8"
@@ -216,7 +238,7 @@ export const TruthCheck: React.FC<TruthCheckProps> = ({
                 )}
                 {viewMode === 'error' && (
                   <Line
-                    name="Absolute Error |Prediction − ARGO|"
+                    name="Absolute Error |Prediction − Truth|"
                     type="monotone"
                     dataKey="error"
                     stroke="#f59e0b"
@@ -245,7 +267,11 @@ export const TruthCheck: React.FC<TruthCheckProps> = ({
             </div>
             <div className="flex items-center gap-2 text-[11px] font-mono text-text-muted">
               <CheckCircle2 className="w-3.5 h-3.5 text-accent" />
-              <span>Independent WMO CTD Float cycle {activeFloat.cycles} ({activeFloat.lastProfile})</span>
+              <span>
+                {live
+                  ? `Snapped ${result.grid_point?.snap_km ?? 0} km to nearest ocean cell`
+                  : `Independent WMO CTD Float cycle ${activeFloat.cycles} (${activeFloat.lastProfile})`}
+              </span>
             </div>
           </div>
         </div>

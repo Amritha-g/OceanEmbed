@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import L from 'leaflet';
+import { useNeuralProfile } from '../hooks/useNeuralProfile';
+import { DEFAULT_DATE } from '../utils/api';
 import {
   Layers, ChevronRight, Anchor,
   Sun, Moon, Globe, Eye, EyeOff, Activity
@@ -13,6 +15,7 @@ interface SelectedPoint {
 import {
   REGION_CONFIGS,
   getPhysicalVariables,
+  mixedLayerDepth,
   ActiveRegion,
 } from '../utils/oceanPhysics';
 
@@ -82,7 +85,20 @@ export const OceanExplorer: React.FC<OceanExplorerProps> = ({
   const selectedMarkerRef = useRef<L.Marker | null>(null);
 
   const currentRegion = REGION_CONFIGS[selectedRegion];
-  const activeVars = getPhysicalVariables(selectedPoint.lat, selectedPoint.lng, selectedRegion);
+  const physicsVars = getPhysicalVariables(selectedPoint.lat, selectedPoint.lng, selectedRegion);
+  const { result: neural } = useNeuralProfile(selectedPoint.lat, selectedPoint.lng, selectedRegion);
+  // Inside the dataset domain, show the real satellite inputs and the model's mixed-layer depth
+  const activeVars = neural?.in_domain
+    ? {
+        ...physicsVars,
+        sst: neural.surface.sst.toFixed(2),
+        sss: neural.surface.sss.toFixed(2),
+        ssh: neural.surface.sla.toFixed(2),
+        current: Math.hypot(neural.surface.u_cur, neural.surface.v_cur).toFixed(2),
+        wind: Math.hypot(neural.surface.u_wind, neural.surface.v_wind).toFixed(1),
+        mld: mixedLayerDepth(neural.depths_m, neural.temperatures),
+      }
+    : physicsVars;
 
   // ── Initialize Leaflet Map ────────────────────────────────────────────────
   useEffect(() => {
@@ -778,7 +794,7 @@ export const OceanExplorer: React.FC<OceanExplorerProps> = ({
                   <div className="p-3 rounded-xl bg-[#061226]/80 border border-cyan-500/20 space-y-1">
                     <span className="text-[10px] text-slate-400">REST Inference Query</span>
                     <div className="p-2 rounded bg-[#030914] text-[10px] text-cyan-300 font-mono break-all border border-cyan-500/10">
-                      GET /api/v1/profile?lat={selectedPoint.lat}&lon={selectedPoint.lng}&date=2024-03-15
+                      GET /api/v1/profile?lat={selectedPoint.lat.toFixed(4)}&lon={selectedPoint.lng.toFixed(4)}&date={DEFAULT_DATE}
                     </div>
                   </div>
                 </div>
