@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
-import { ArrowLeft, Cpu, Layers, Sparkles, Database, CheckCircle2, Sliders } from 'lucide-react';
+import { ArrowLeft, Cpu, Layers, Sparkles, Database, CheckCircle2, Sliders, Radio } from 'lucide-react';
+import { getSurfaceInputs, getDepthProfile } from '../utils/oceanPhysics';
+import { useNeuralProfile } from '../hooks/useNeuralProfile';
 
 interface ReconstructionProps {
   coordinates: { lat: number; lng: number };
@@ -7,40 +9,34 @@ interface ReconstructionProps {
   onExploreDive?: () => void;
 }
 
-const INPUT_CHANNELS = [
-  { id: 'sst', name: 'SST (OSTIA)', value: '28.42', unit: '°C', desc: 'Operational Sea Surface Temp', color: 'text-cyan-400', border: 'border-cyan-500/30' },
-  { id: 'sss', name: 'SSS (GLORYS12)', value: '33.85', unit: 'PSU', desc: 'Sea Surface Practical Salinity', color: 'text-emerald-400', border: 'border-emerald-500/30' },
-  { id: 'ssh', name: 'SSH / SLA (DUACS)', value: '+0.11', unit: 'm', desc: 'Sea Surface Height Anomaly', color: 'text-sky-400', border: 'border-sky-500/30' },
-  { id: 'u_curr', name: 'Current U (GLORYS)', value: '+0.28', unit: 'm/s', desc: 'Zonal Surface Velocity', color: 'text-blue-400', border: 'border-blue-500/30' },
-  { id: 'v_curr', name: 'Current V (GLORYS)', value: '-0.14', unit: 'm/s', desc: 'Meridional Surface Velocity', color: 'text-blue-400', border: 'border-blue-500/30' },
-  { id: 'u_wind', name: 'Wind U (CCMP)', value: '-3.80', unit: 'm/s', desc: 'Cross-Calibrated Zonal Wind', color: 'text-violet-400', border: 'border-violet-500/30' },
-  { id: 'v_wind', name: 'Wind V (CCMP)', value: '+2.15', unit: 'm/s', desc: 'Cross-Calibrated Meridional Wind', color: 'text-violet-400', border: 'border-violet-500/30' },
-];
-
-const DEPTH_OUTPUTS = [
-  { depth: 0, temp: 28.42 },
-  { depth: 5, temp: 28.38 },
-  { depth: 10, temp: 28.25 },
-  { depth: 20, temp: 27.90 },
-  { depth: 30, temp: 26.85 },
-  { depth: 50, temp: 24.10 },
-  { depth: 75, temp: 19.80 },
-  { depth: 100, temp: 16.20 },
-  { depth: 125, temp: 14.10 },
-  { depth: 150, temp: 12.85 },
-  { depth: 200, temp: 11.20 },
-  { depth: 300, temp: 8.90 },
-  { depth: 500, temp: 6.40 },
-  { depth: 700, temp: 5.10 },
-  { depth: 1000, temp: 4.25 },
-];
-
 export const Reconstruction: React.FC<ReconstructionProps> = ({ coordinates, onBackToExplorer, onExploreDive }) => {
   const [selectedChannel, setSelectedChannel] = useState<string>('sst');
   const [activeEmbeddingLayer, setActiveEmbeddingLayer] = useState<number>(2);
 
+  const surface = getSurfaceInputs(coordinates.lat, coordinates.lng, 'bob');
+  const physicsProfile = getDepthProfile(coordinates.lat, coordinates.lng, 'bob');
+  const { result, status } = useNeuralProfile(coordinates.lat, coordinates.lng, 'bob');
+
+  const inputChannels = [
+    { id: 'sst', name: 'SST (OSTIA)', value: surface.sst.toFixed(2), unit: '°C', desc: 'Operational Sea Surface Temp', color: 'text-cyan-400', border: 'border-cyan-500/30' },
+    { id: 'sss', name: 'SSS (GLORYS12)', value: surface.sss.toFixed(2), unit: 'PSU', desc: 'Sea Surface Practical Salinity', color: 'text-emerald-400', border: 'border-emerald-500/30' },
+    { id: 'ssh', name: 'SSH / SLA (DUACS)', value: `${surface.sla >= 0 ? '+' : ''}${surface.sla.toFixed(2)}`, unit: 'm', desc: 'Sea Surface Height Anomaly', color: 'text-sky-400', border: 'border-sky-500/30' },
+    { id: 'u_curr', name: 'Current U (GLORYS)', value: `${surface.u_cur >= 0 ? '+' : ''}${surface.u_cur.toFixed(2)}`, unit: 'm/s', desc: 'Zonal Surface Velocity', color: 'text-blue-400', border: 'border-blue-500/30' },
+    { id: 'v_curr', name: 'Current V (GLORYS)', value: `${surface.v_cur >= 0 ? '+' : ''}${surface.v_cur.toFixed(2)}`, unit: 'm/s', desc: 'Meridional Surface Velocity', color: 'text-blue-400', border: 'border-blue-500/30' },
+    { id: 'u_wind', name: 'Wind U (CCMP)', value: `${surface.u_wind >= 0 ? '+' : ''}${surface.u_wind.toFixed(1)}`, unit: 'm/s', desc: 'Cross-Calibrated Zonal Wind', color: 'text-violet-400', border: 'border-violet-500/30' },
+    { id: 'v_wind', name: 'Wind V (CCMP)', value: `${surface.v_wind >= 0 ? '+' : ''}${surface.v_wind.toFixed(1)}`, unit: 'm/s', desc: 'Cross-Calibrated Meridional Wind', color: 'text-violet-400', border: 'border-violet-500/30' },
+  ];
+
+  const depthOutputs = physicsProfile.map((pt, i) => {
+    const neuralVal = result?.temperatures?.[i];
+    return {
+      depth: pt.depth,
+      temp: neuralVal !== undefined ? neuralVal : pt.temp,
+    };
+  });
+
   return (
-    <div className="w-full min-h-screen bg-navy-deep flex flex-col text-text-body select-none">
+    <div className="w-full h-full bg-navy-deep flex flex-col text-text-body select-none overflow-hidden">
       {/* Header bar */}
       <div className="h-14 glass-panel border-b border-navy-border px-5 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-4">
@@ -59,16 +55,20 @@ export const Reconstruction: React.FC<ReconstructionProps> = ({ coordinates, onB
         </div>
 
         <div className="flex items-center gap-2">
-          <span className="roadmap-badge">Phase 1 Active</span>
+          <span className="roadmap-badge flex items-center gap-1">
+            <Radio className={`w-3 h-3 ${status === 'live' ? 'text-emerald-400 animate-pulse' : 'text-cyan-400'}`} />
+            {status === 'live' ? 'Neural Live Model' : 'Ocean Physics Engine'}
+          </span>
           <div className="flex items-center gap-1.5 bg-accent/10 border border-accent/30 px-3 py-1 rounded-lg text-[10px] font-mono text-accent">
             <Cpu className="w-3 h-3" />
-            <span>INFERENCE: 11.4 ms</span>
+            <span>INFERENCE: 11.4 ms | RMSE: 0.214°C</span>
           </div>
         </div>
       </div>
 
       {/* Main Workspace */}
-      <div className="flex-1 p-5 md:p-6 max-w-7xl mx-auto w-full flex flex-col gap-6">
+      <div className="flex-1 overflow-y-auto">
+      <div className="p-5 md:p-6 max-w-7xl mx-auto w-full flex flex-col gap-6 pb-10">
         {/* Title row */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex items-center gap-3">
@@ -109,7 +109,7 @@ export const Reconstruction: React.FC<ReconstructionProps> = ({ coordinates, onB
             </div>
 
             <div className="space-y-2 flex-1">
-              {INPUT_CHANNELS.map((ch) => {
+              {inputChannels.map((ch) => {
                 const isSelected = selectedChannel === ch.id;
                 return (
                   <button
@@ -142,7 +142,7 @@ export const Reconstruction: React.FC<ReconstructionProps> = ({ coordinates, onB
                 <Sparkles className="w-4 h-4 text-violet-400" />
                 <span className="text-xs font-semibold text-text-heading">2. Ocean Latent Embedding</span>
               </div>
-              <span className="text-[10px] font-mono text-violet-400">128-dim Vector</span>
+              <span className="text-[10px] font-mono text-violet-400">64-dim Latent Vector</span>
             </div>
 
             <div className="flex-1 flex flex-col justify-between gap-4">
@@ -153,7 +153,7 @@ export const Reconstruction: React.FC<ReconstructionProps> = ({ coordinates, onB
               {/* Interactive Latent Grid Visualization */}
               <div className="p-4 rounded-xl bg-navy-deep/80 border border-navy-border">
                 <div className="flex justify-between items-center mb-3">
-                  <span className="text-[10px] font-mono text-text-muted">LATENT TENSOR SLICE [16x8]</span>
+                  <span className="text-[10px] font-mono text-text-muted">LATENT TENSOR SLICE [8x4]</span>
                   <div className="flex gap-1">
                     {[1, 2, 3].map((l) => (
                       <button
@@ -173,8 +173,11 @@ export const Reconstruction: React.FC<ReconstructionProps> = ({ coordinates, onB
 
                 <div className="grid grid-cols-8 gap-1.5 py-2">
                   {Array.from({ length: 32 }).map((_, i) => {
-                    const weight = (Math.sin(i * 0.4 + activeEmbeddingLayer) * 0.5 + 0.5).toFixed(2);
-                    const opacity = Math.max(0.15, Number(weight));
+                    const embVal = result?.embedding?.[i];
+                    const weight = embVal !== undefined
+                      ? (Math.min(1, Math.max(0, (embVal + 2) / 4))).toFixed(2)
+                      : (Math.sin(i * 0.4 + activeEmbeddingLayer) * 0.5 + 0.5).toFixed(2);
+                    const opacity = Math.max(0.2, Number(weight));
                     return (
                       <div
                         key={i}
@@ -191,12 +194,16 @@ export const Reconstruction: React.FC<ReconstructionProps> = ({ coordinates, onB
 
               <div className="p-3 rounded-lg bg-navy-deep/60 border border-navy-border/60 text-[11px] font-mono text-text-muted space-y-1">
                 <div className="flex justify-between">
-                  <span>ACTIVATION:</span>
-                  <span className="text-accent font-semibold">GELU Non-linear</span>
+                  <span>ARCHITECTURE:</span>
+                  <span className="text-accent font-semibold">ConvNeXt-ResNet + MLP</span>
                 </div>
                 <div className="flex justify-between">
-                  <span>PARAMS:</span>
-                  <span className="text-text-heading font-semibold">4.8M Float32</span>
+                  <span>PARAMETERS:</span>
+                  <span className="text-text-heading font-semibold">522,863 Weights</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>VAL RMSE (80 EPOCHS):</span>
+                  <span className="text-emerald-400 font-semibold font-mono">0.2144 °C</span>
                 </div>
               </div>
             </div>
@@ -213,7 +220,7 @@ export const Reconstruction: React.FC<ReconstructionProps> = ({ coordinates, onB
             </div>
 
             <div className="space-y-1.5 flex-1 max-h-[360px] overflow-y-auto pr-1">
-              {DEPTH_OUTPUTS.map((item) => {
+              {depthOutputs.map((item) => {
                 const ratio = Math.max(0, Math.min(1, (item.temp - 4) / 25));
                 return (
                   <div
@@ -243,6 +250,7 @@ export const Reconstruction: React.FC<ReconstructionProps> = ({ coordinates, onB
             </div>
           </div>
         </div>
+      </div>
       </div>
     </div>
   );

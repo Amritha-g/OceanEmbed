@@ -14,6 +14,7 @@ interface OceanDiveProps {
   coordinates: { lat: number; lng: number };
   region?: ActiveRegion;
   onBackToExplorer: () => void;
+  onNavigateTo?: (view: any, coords?: { lat: number; lng: number }) => void;
 }
 
 export const OceanDive: React.FC<OceanDiveProps> = ({

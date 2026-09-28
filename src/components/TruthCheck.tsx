@@ -14,6 +14,7 @@ interface TruthCheckProps {
   coordinates: { lat: number; lng: number };
   region?: ActiveRegion;
   onBackToExplorer: () => void;
+  onNavigateTo?: (view: any, coords?: { lat: number; lng: number }) => void;
 }
 
 type ViewMode = 'comparison' | 'prediction' | 'truth' | 'error';
