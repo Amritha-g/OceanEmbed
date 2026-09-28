@@ -13,18 +13,84 @@ export const Reconstruction: React.FC<ReconstructionProps> = ({ coordinates, onB
   const [selectedChannel, setSelectedChannel] = useState<string>('sst');
   const [activeEmbeddingLayer, setActiveEmbeddingLayer] = useState<number>(2);
 
-  const surface = getSurfaceInputs(coordinates.lat, coordinates.lng, 'bob');
-  const physicsProfile = getDepthProfile(coordinates.lat, coordinates.lng, 'bob');
   const { result, status } = useNeuralProfile(coordinates.lat, coordinates.lng, 'bob');
+  const activeSurface = result?.surface ?? getSurfaceInputs(coordinates.lat, coordinates.lng, 'bob');
+  const physicsProfile = getDepthProfile(coordinates.lat, coordinates.lng, 'bob');
+
+  const lineage = result?.lineage;
+  const isLiveFeed = result?.is_live ?? false;
 
   const inputChannels = [
-    { id: 'sst', name: 'SST (OSTIA)', value: surface.sst.toFixed(2), unit: '°C', desc: 'Operational Sea Surface Temp', color: 'text-cyan-400', border: 'border-cyan-500/30' },
-    { id: 'sss', name: 'SSS (GLORYS12)', value: surface.sss.toFixed(2), unit: 'PSU', desc: 'Sea Surface Practical Salinity', color: 'text-emerald-400', border: 'border-emerald-500/30' },
-    { id: 'ssh', name: 'SSH / SLA (DUACS)', value: `${surface.sla >= 0 ? '+' : ''}${surface.sla.toFixed(2)}`, unit: 'm', desc: 'Sea Surface Height Anomaly', color: 'text-sky-400', border: 'border-sky-500/30' },
-    { id: 'u_curr', name: 'Current U (GLORYS)', value: `${surface.u_cur >= 0 ? '+' : ''}${surface.u_cur.toFixed(2)}`, unit: 'm/s', desc: 'Zonal Surface Velocity', color: 'text-blue-400', border: 'border-blue-500/30' },
-    { id: 'v_curr', name: 'Current V (GLORYS)', value: `${surface.v_cur >= 0 ? '+' : ''}${surface.v_cur.toFixed(2)}`, unit: 'm/s', desc: 'Meridional Surface Velocity', color: 'text-blue-400', border: 'border-blue-500/30' },
-    { id: 'u_wind', name: 'Wind U (CCMP)', value: `${surface.u_wind >= 0 ? '+' : ''}${surface.u_wind.toFixed(1)}`, unit: 'm/s', desc: 'Cross-Calibrated Zonal Wind', color: 'text-violet-400', border: 'border-violet-500/30' },
-    { id: 'v_wind', name: 'Wind V (CCMP)', value: `${surface.v_wind >= 0 ? '+' : ''}${surface.v_wind.toFixed(1)}`, unit: 'm/s', desc: 'Cross-Calibrated Meridional Wind', color: 'text-violet-400', border: 'border-violet-500/30' },
+    { 
+      id: 'sst', 
+      name: isLiveFeed ? 'SST (Open-Meteo Live)' : 'SST (OSTIA Satellite)', 
+      value: activeSurface.sst.toFixed(2), 
+      unit: '°C', 
+      desc: lineage?.sst || 'Operational Sea Surface Temp', 
+      color: 'text-cyan-400', 
+      border: 'border-cyan-500/30',
+      isLive: isLiveFeed
+    },
+    { 
+      id: 'sss', 
+      name: isLiveFeed ? 'SSS (Copernicus NRT)' : 'SSS (GLORYS12)', 
+      value: activeSurface.sss.toFixed(2), 
+      unit: 'PSU', 
+      desc: lineage?.sss || 'Sea Surface Practical Salinity', 
+      color: 'text-emerald-400', 
+      border: 'border-emerald-500/30',
+      isLive: isLiveFeed
+    },
+    { 
+      id: 'ssh', 
+      name: isLiveFeed ? 'SSH/SLA (DUACS Altimetry)' : 'SSH / SLA (DUACS)', 
+      value: `${activeSurface.sla >= 0 ? '+' : ''}${activeSurface.sla.toFixed(2)}`, 
+      unit: 'm', 
+      desc: lineage?.sla || 'Sea Surface Height Anomaly', 
+      color: 'text-sky-400', 
+      border: 'border-sky-500/30',
+      isLive: isLiveFeed
+    },
+    { 
+      id: 'u_curr', 
+      name: isLiveFeed ? 'Current U (Open-Meteo Live)' : 'Current U (GLORYS)', 
+      value: `${activeSurface.u_cur >= 0 ? '+' : ''}${activeSurface.u_cur.toFixed(2)}`, 
+      unit: 'm/s', 
+      desc: lineage?.u_cur || 'Zonal Surface Velocity', 
+      color: 'text-blue-400', 
+      border: 'border-blue-500/30',
+      isLive: isLiveFeed
+    },
+    { 
+      id: 'v_curr', 
+      name: isLiveFeed ? 'Current V (Open-Meteo Live)' : 'Current V (GLORYS)', 
+      value: `${activeSurface.v_cur >= 0 ? '+' : ''}${activeSurface.v_cur.toFixed(2)}`, 
+      unit: 'm/s', 
+      desc: lineage?.v_cur || 'Meridional Surface Velocity', 
+      color: 'text-blue-400', 
+      border: 'border-blue-500/30',
+      isLive: isLiveFeed
+    },
+    { 
+      id: 'u_wind', 
+      name: isLiveFeed ? 'Wind U (Open-Meteo 10m Live)' : 'Wind U (CCMP)', 
+      value: `${activeSurface.u_wind >= 0 ? '+' : ''}${activeSurface.u_wind.toFixed(1)}`, 
+      unit: 'm/s', 
+      desc: lineage?.u_wind || 'Cross-Calibrated Zonal Wind', 
+      color: 'text-violet-400', 
+      border: 'border-violet-500/30',
+      isLive: isLiveFeed
+    },
+    { 
+      id: 'v_wind', 
+      name: isLiveFeed ? 'Wind V (Open-Meteo 10m Live)' : 'Wind V (CCMP)', 
+      value: `${activeSurface.v_wind >= 0 ? '+' : ''}${activeSurface.v_wind.toFixed(1)}`, 
+      unit: 'm/s', 
+      desc: lineage?.v_wind || 'Cross-Calibrated Meridional Wind', 
+      color: 'text-violet-400', 
+      border: 'border-violet-500/30',
+      isLive: isLiveFeed
+    },
   ];
 
   const depthOutputs = physicsProfile.map((pt, i) => {
@@ -57,11 +123,13 @@ export const Reconstruction: React.FC<ReconstructionProps> = ({ coordinates, onB
         <div className="flex items-center gap-2">
           <span className="roadmap-badge flex items-center gap-1">
             <Radio className={`w-3 h-3 ${status === 'live' ? 'text-emerald-400 animate-pulse' : 'text-cyan-400'}`} />
-            {status === 'live' ? 'Neural Live Model' : 'Ocean Physics Engine'}
+            {status === 'live' 
+              ? (isLiveFeed ? 'Live Satellite Feed (Open-Meteo + Copernicus)' : 'Neural Live Model')
+              : 'Ocean Physics Engine'}
           </span>
           <div className="flex items-center gap-1.5 bg-accent/10 border border-accent/30 px-3 py-1 rounded-lg text-[10px] font-mono text-accent">
             <Cpu className="w-3 h-3" />
-            <span>INFERENCE: 11.4 ms | RMSE: 0.214°C</span>
+            <span>INFERENCE: {result?.inference_latency_ms ? `${result.inference_latency_ms} ms` : '11.4 ms'} | RMSE: 0.214°C</span>
           </div>
         </div>
       </div>

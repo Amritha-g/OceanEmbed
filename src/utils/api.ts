@@ -1,4 +1,4 @@
-import { ActiveRegion, getSurfaceInputs, SurfaceInputs } from './oceanPhysics';
+import { ActiveRegion, SurfaceInputs } from './oceanPhysics';
 
 const API_BASE = ((import.meta as unknown as { env?: Record<string, string> }).env?.VITE_API_URL) ?? '/api/v1';
 
@@ -11,6 +11,10 @@ export interface ReconstructResponse {
   date?: string;
   region?: string;
   source: 'neural';
+  is_live?: boolean;
+  source_provider?: string;
+  lineage?: Record<string, string>;
+  inference_latency_ms?: number;
   surface_synthesized: boolean;
   model: {
     name: string;
@@ -66,24 +70,22 @@ export async function reconstructPoint(
   lng: number,
   region: ActiveRegion,
   date = '2024-03-15',
+  surfaceOverrides?: Partial<SurfaceInputs>
 ): Promise<ReconstructResponse> {
-  const surface = getSurfaceInputs(lat, lng, region, date);
+  const payload: Record<string, any> = {
+    lat,
+    lng,
+    date,
+    region,
+  };
+  if (surfaceOverrides) {
+    Object.assign(payload, surfaceOverrides);
+  }
+
   const res = await fetch(`${API_BASE}/reconstruct`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      lat,
-      lng,
-      date,
-      region,
-      sst: surface.sst,
-      sss: surface.sss,
-      sla: surface.sla,
-      u_cur: surface.u_cur,
-      v_cur: surface.v_cur,
-      u_wind: surface.u_wind,
-      v_wind: surface.v_wind,
-    }),
+    body: JSON.stringify(payload),
   });
   if (!res.ok) {
     const text = await res.text();

@@ -39,6 +39,9 @@ dist-ssr/
 # Raw datasets (too large / not for repo)
 data/raw/
 
-# Python cache
+# Python cache and environments
 __pycache__/
 *.pyc
+.venv/
+venv/
+.env*

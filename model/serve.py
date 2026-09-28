@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import List, Optional
@@ -31,11 +32,21 @@ from fastapi import APIRouter, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+import logging
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from model.climatology import day_of_year, surface_from_point  # noqa: E402
+from model.live_feed import get_live_surface_inputs  # noqa: E402
 from model.ocean_embed import STD_DEPTHS, OceanEmbedNet  # noqa: E402
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="[%(asctime)s] [%(levelname)s] [Serve] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger("OceanEmbed.Serve")
 
 MODEL_PATH = ROOT / "model" / "best_model.pt"
 LOG_PATH = ROOT / "model" / "train_log.json"
@@ -257,31 +268,39 @@ def metrics():
 def reconstruct(req: ReconstructRequest):
     lon = req.lng if req.lng is not None else req.lon
     if lon is None:
+        logger.error("Reconstruct rejected: missing lng/lon")
         raise HTTPException(400, "lng or lon is required")
 
-    clim = surface_from_point(req.lat, lon, req.region)
+    logger.info("Received /api/v1/reconstruct request for coordinates (%.4f°N, %.4f°E, date=%s, region=%s)", req.lat, lon, req.date, req.region)
+
+    # 1. Fetch live hybrid marine feeds
+    live_feed = get_live_surface_inputs(req.lat, lon, req.region)
     src = req.surface.model_dump() if req.surface else {}
+    
+    # 2. Allow optional client overrides if explicitly provided
     fields = {
-        "sst": req.sst if req.sst is not None else src.get("sst"),
-        "sss": req.sss if req.sss is not None else src.get("sss"),
-        "sla": req.sla if req.sla is not None else src.get("sla"),
-        "u_cur": req.u_cur if req.u_cur is not None else src.get("u_cur"),
-        "v_cur": req.v_cur if req.v_cur is not None else src.get("v_cur"),
-        "u_wind": req.u_wind if req.u_wind is not None else src.get("u_wind"),
-        "v_wind": req.v_wind if req.v_wind is not None else src.get("v_wind"),
+        "sst": req.sst if req.sst is not None else (src.get("sst") if src.get("sst") is not None else live_feed["sst"]),
+        "sss": req.sss if req.sss is not None else (src.get("sss") if src.get("sss") is not None else live_feed["sss"]),
+        "sla": req.sla if req.sla is not None else (src.get("sla") if src.get("sla") is not None else live_feed["sla"]),
+        "u_cur": req.u_cur if req.u_cur is not None else (src.get("u_cur") if src.get("u_cur") is not None else live_feed["u_cur"]),
+        "v_cur": req.v_cur if req.v_cur is not None else (src.get("v_cur") if src.get("v_cur") is not None else live_feed["v_cur"]),
+        "u_wind": req.u_wind if req.u_wind is not None else (src.get("u_wind") if src.get("u_wind") is not None else live_feed["u_wind"]),
+        "v_wind": req.v_wind if req.v_wind is not None else (src.get("v_wind") if src.get("v_wind") is not None else live_feed["v_wind"]),
     }
-    used_synth = False
-    for k, v in fields.items():
-        if v is None:
-            fields[k] = clim[k]
-            used_synth = True
 
     doy = day_of_year(req.date)
+    logger.info("Running PyTorch forward pass on surface features: SST=%.2f°C, SSS=%.2f PSU, SLA=%.3fm, Winds=(%.2f, %.2f) m/s, DOY=%d",
+                fields["sst"], fields["sss"], fields["sla"], fields["u_wind"], fields["v_wind"], doy)
+    
+    t0 = time.time()
     temps, embedding = _infer_point(
         fields["sst"], fields["sss"], fields["sla"],
         fields["u_cur"], fields["v_cur"], fields["u_wind"], fields["v_wind"],
         req.lat, doy,
     )
+    latency_ms = (time.time() - t0) * 1000.0
+    logger.info("Model inference completed in %.2f ms. 0m Temp=%.2f°C, 1000m Temp=%.2f°C", latency_ms, temps[0], temps[-1])
+
     return {
         "depths_m": STD_DEPTHS,
         "temperatures": [round(t, 3) for t in temps],
@@ -291,7 +310,11 @@ def reconstruct(req: ReconstructRequest):
         "date": req.date,
         "region": req.region,
         "source": "neural",
-        "surface_synthesized": used_synth,
+        "is_live": live_feed.get("is_live", False),
+        "source_provider": live_feed.get("source_provider", "Hybrid Live Ingest"),
+        "lineage": live_feed.get("lineage", {}),
+        "surface_synthesized": not live_feed.get("is_live", False),
+        "inference_latency_ms": round(latency_ms, 2),
         "model": _model_card(),
     }
 

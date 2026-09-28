@@ -15,6 +15,7 @@ import {
   getPhysicalVariables,
   ActiveRegion,
 } from '../utils/oceanPhysics';
+import { useNeuralProfile } from '../hooks/useNeuralProfile';
 
 interface OceanExplorerProps {
   onExploreProfile?: (lat: number, lng: number) => void;
@@ -83,6 +84,8 @@ export const OceanExplorer: React.FC<OceanExplorerProps> = ({
 
   const currentRegion = REGION_CONFIGS[selectedRegion];
   const activeVars = getPhysicalVariables(selectedPoint.lat, selectedPoint.lng, selectedRegion);
+  const { result, status } = useNeuralProfile(selectedPoint.lat, selectedPoint.lng, selectedRegion);
+  const isLiveFeed = result?.is_live ?? false;
 
   // ── Initialize Leaflet Map ────────────────────────────────────────────────
   useEffect(() => {
@@ -600,28 +603,57 @@ export const OceanExplorer: React.FC<OceanExplorerProps> = ({
                   <div className="bg-[#040c1a]/90 p-3.5 rounded-xl border border-cyan-500/30 glow-accent-sm">
                     <div className="flex items-center justify-between text-[10px] text-slate-400 uppercase tracking-widest mb-1">
                       <span>Target Subsurface Column</span>
-                      <span className="text-cyan-400 font-bold">0 – 1000m</span>
+                      <span className="flex items-center gap-1.5 font-bold">
+                        <span className={`w-2 h-2 rounded-full ${status === 'live' ? 'bg-emerald-400 animate-pulse' : 'bg-cyan-400'}`} />
+                        <span className={status === 'live' ? 'text-emerald-400' : 'text-cyan-400'}>
+                          {status === 'live' ? (isLiveFeed ? 'Live Sat Feed' : 'Neural Live') : 'Physics Sim'}
+                        </span>
+                      </span>
                     </div>
                     <div className="text-base font-bold text-cyan-300 text-glow">
                       {selectedPoint.lat.toFixed(4)}° N, {selectedPoint.lng.toFixed(4)}° E
                     </div>
-                    <div className="text-[10px] text-slate-400 mt-1">
-                      Region: <span className="text-slate-200">{currentRegion.name}</span>
+                    <div className="flex items-center justify-between text-[10px] text-slate-400 mt-1">
+                      <span>Region: <span className="text-slate-200">{currentRegion.name}</span></span>
+                      {result?.inference_latency_ms && (
+                        <span className="text-emerald-400/90 font-mono">{result.inference_latency_ms} ms</span>
+                      )}
                     </div>
                   </div>
 
                   {/* Surface Variables Readout */}
                   <div>
-                    <div className="text-[10px] uppercase tracking-wider text-slate-400 mb-2 font-semibold">
-                      Surface Satellite Inputs (X)
+                    <div className="flex items-center justify-between text-[10px] uppercase tracking-wider text-slate-400 mb-2 font-semibold">
+                      <span>Surface Satellite Inputs (X)</span>
+                      {isLiveFeed && <span className="text-emerald-400 font-bold lowercase">● open-meteo + copernicus</span>}
                     </div>
                     <div className="space-y-1.5">
                       {[
-                        ['Sea Surface Temp (SST)', `${activeVars.sst} °C`, 'OSTIA / L4'],
-                        ['Sea Surface Salinity (SSS)', `${activeVars.sss} PSU`, 'GLORYS12'],
-                        ['Sea Level Anomaly (SSH)', `${activeVars.ssh} m`, 'DUACS'],
-                        ['Current Speed (U/V)', `${activeVars.current} m/s`, 'GLORYS12'],
-                        ['Surface Winds (10m)', `${activeVars.wind} m/s`, 'CCMP V3.1'],
+                        [
+                          'Sea Surface Temp (SST)', 
+                          result?.surface ? `${result.surface.sst.toFixed(2)} °C` : `${activeVars.sst} °C`, 
+                          isLiveFeed ? 'Open-Meteo Live NRT' : 'OSTIA / L4'
+                        ],
+                        [
+                          'Sea Surface Salinity (SSS)', 
+                          result?.surface ? `${result.surface.sss.toFixed(2)} PSU` : `${activeVars.sss} PSU`, 
+                          isLiveFeed ? 'Copernicus GLORYS NRT' : 'GLORYS12'
+                        ],
+                        [
+                          'Sea Level Anomaly (SSH)', 
+                          result?.surface ? `${result.surface.sla >= 0 ? '+' : ''}${result.surface.sla.toFixed(2)} m` : `${activeVars.ssh} m`, 
+                          isLiveFeed ? 'Copernicus DUACS NRT' : 'DUACS'
+                        ],
+                        [
+                          'Current Speed (U/V)', 
+                          result?.surface ? `${Math.hypot(result.surface.u_cur, result.surface.v_cur).toFixed(2)} m/s` : `${activeVars.current} m/s`, 
+                          isLiveFeed ? 'Open-Meteo Current Model' : 'GLORYS12'
+                        ],
+                        [
+                          'Surface Winds (10m)', 
+                          result?.surface ? `${Math.hypot(result.surface.u_wind, result.surface.v_wind).toFixed(1)} m/s` : `${activeVars.wind} m/s`, 
+                          isLiveFeed ? 'Open-Meteo 10m Feed' : 'CCMP V3.1'
+                        ],
                       ].map(([label, val, src]) => (
                         <div key={label} className="flex items-center justify-between p-2.5 rounded-lg bg-[#061226]/80 border border-cyan-500/15">
                           <div>
@@ -637,11 +669,23 @@ export const OceanExplorer: React.FC<OceanExplorerProps> = ({
                   {/* Derived Inferences */}
                   <div className="p-3 rounded-xl bg-[#061226]/80 border border-cyan-500/15">
                     <div className="text-[10px] uppercase tracking-wider text-slate-400 mb-2 font-semibold">
-                      Physical Indicators
+                      Physical Indicators & Neural Output
                     </div>
                     <div className="grid grid-cols-2 gap-2 text-[10px]">
                       <div className="p-2 rounded bg-[#030914]/80 border border-cyan-500/10">
-                        <span className="text-slate-400">Mixed Layer:</span>
+                        <span className="text-slate-400">Surface Temp (0m):</span>
+                        <div className="text-cyan-300 font-bold text-xs mt-0.5">
+                          {result?.temperatures?.[0] !== undefined ? `${result.temperatures[0].toFixed(2)} °C` : `${activeVars.sst} °C`}
+                        </div>
+                      </div>
+                      <div className="p-2 rounded bg-[#030914]/80 border border-cyan-500/10">
+                        <span className="text-slate-400">Deep Temp (1000m):</span>
+                        <div className="text-cyan-300 font-bold text-xs mt-0.5">
+                          {result?.temperatures?.[14] !== undefined ? `${result.temperatures[14].toFixed(2)} °C` : '6.80 °C'}
+                        </div>
+                      </div>
+                      <div className="p-2 rounded bg-[#030914]/80 border border-cyan-500/10">
+                        <span className="text-slate-400">Mixed Layer (MLD):</span>
                         <div className="text-cyan-300 font-bold text-xs mt-0.5">{activeVars.mld} m</div>
                       </div>
                       <div className="p-2 rounded bg-[#030914]/80 border border-cyan-500/10">
