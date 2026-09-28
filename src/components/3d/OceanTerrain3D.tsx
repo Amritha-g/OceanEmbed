@@ -2,7 +2,7 @@ import React, { useRef, useMemo } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 
-const OceanWaveMesh: React.FC<{ activeTarget: string }> = ({ activeTarget }) => {
+const OceanWaveMesh: React.FC<{ activeTarget: string }> = ({ activeTarget: _activeTarget }) => {
   const meshRef = useRef<THREE.Mesh>(null!);
   const particlesRef = useRef<THREE.Points>(null!);
 

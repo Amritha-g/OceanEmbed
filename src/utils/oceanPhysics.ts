@@ -295,3 +295,28 @@ export const getDepthProfile = (lat: number, lng: number, region?: ActiveRegion)
     };
   });
 };
+
+export interface SurfaceInputs {
+  sst: number;
+  sss: number;
+  sla: number;
+  u_cur: number;
+  v_cur: number;
+  u_wind: number;
+  v_wind: number;
+}
+
+export const getSurfaceInputs = (lat: number, lng: number, region?: ActiveRegion, _date?: string): SurfaceInputs => {
+  const vars = getPhysicalVariables(lat, lng, region);
+  const cur = parseFloat(vars.current);
+  const wnd = parseFloat(vars.wind);
+  return {
+    sst: parseFloat(vars.sst),
+    sss: parseFloat(vars.sss),
+    sla: parseFloat(vars.ssh),
+    u_cur: Number((cur * 0.75).toFixed(2)),
+    v_cur: Number((-cur * 0.35).toFixed(2)),
+    u_wind: Number((-wnd * 0.82).toFixed(2)),
+    v_wind: Number((wnd * 0.45).toFixed(2)),
+  };
+};

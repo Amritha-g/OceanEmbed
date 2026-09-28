@@ -27,7 +27,7 @@ export function App() {
   };
 
   return (
-    <div className="min-h-screen bg-[#070b12] text-slate-200 font-sans antialiased flex flex-col selection:bg-cyan-500 selection:text-black">
+    <div className="h-screen w-full bg-[#070b12] text-slate-200 font-sans antialiased flex flex-col selection:bg-cyan-500 selection:text-black overflow-hidden">
       {/* ── Single Top Mission Commander Header Bar (No left navbar) ── */}
       <Navbar
         activeView={activeView}
@@ -36,7 +36,7 @@ export function App() {
       />
 
       {/* ── 100% Fullscreen Immersive Main Workspace ── */}
-      <main className="flex-1 relative w-full flex flex-col">
+      <main className="flex-1 relative w-full h-[calc(100vh-3rem)] overflow-hidden flex flex-col">
         {activeView === 'home' && (
           <HomeScreen
             onExplore={() => setActiveView('explorer')}

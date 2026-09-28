@@ -361,7 +361,7 @@ export const OceanExplorer: React.FC<OceanExplorerProps> = ({
 
 
   return (
-    <div className="w-full h-[calc(100vh-4rem)] bg-[#050b14] flex flex-col overflow-hidden relative select-none">
+    <div className="w-full h-full bg-[#050b14] flex flex-col overflow-hidden relative select-none">
       
       {/* ── TOP HEADER ── */}
       <header className="h-14 glass-panel border-b border-cyan-500/20 px-6 md:px-8 flex items-center justify-between z-30 shrink-0 shadow-lg gap-4">

@@ -1,10 +1,5 @@
 import React, { useState } from 'react';
-import {
-  Compass, Waves, Cpu, ShieldCheck, BrainCircuit,
-  MapPin, Radio, Activity, ArrowUpRight, Crosshair,
-  Plus, Minus, Anchor, AlertTriangle, BatteryCharging,
-  Navigation, Eye, Sparkles
-} from 'lucide-react';
+import { ArrowUpRight, Plus, Minus, Crosshair } from 'lucide-react';
 import { ViewType } from './Navbar';
 import { OceanTerrain3D } from './3d/OceanTerrain3D';
 
@@ -74,7 +69,6 @@ const WAYPOINTS = [
 
 export const HomeScreen: React.FC<HomeScreenProps> = ({ onExplore, onSelectView }) => {
   const [activeWp, setActiveWp] = useState(WAYPOINTS[2]);
-  const [viewMode, setViewMode] = useState<'3D' | '2D'>('3D');
 
   const selectTab = (view: ViewType) => {
     if (onSelectView) onSelectView(view);
@@ -82,9 +76,9 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onExplore, onSelectView 
   };
 
   return (
-    <div className="w-full min-h-[calc(100vh-4rem)] bg-[#070b12] text-slate-200 p-4 md:p-6 flex flex-col justify-between select-none font-sans overflow-hidden">
+    <div className="w-full h-full bg-[#070b12] text-slate-200 p-3.5 md:p-4 flex flex-col justify-between select-none font-sans overflow-hidden gap-3">
       {/* ── TOP SECTION: DYNAMIC 3D OCEAN BASIN & TACTICAL PROBE BEACONS ── */}
-      <div className="relative w-full h-[410px] md:h-[470px] bg-[#090e18] border border-white/[0.08] rounded-3xl overflow-hidden shadow-2xl flex flex-col justify-between p-6">
+      <div className="relative w-full flex-1 min-h-0 bg-[#090e18] border border-white/[0.08] rounded-3xl overflow-hidden shadow-2xl flex flex-col justify-between p-4 md:p-5">
         {/* Real-Time 3D Ocean Bathymetry Waves Canvas */}
         <OceanTerrain3D activeTarget={activeWp.id} />
 
@@ -97,30 +91,12 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onExplore, onSelectView 
           }}
         />
 
-        {/* ── Top Left: Mode Selector (2D / 3D) & Tactical Legend ── */}
+        {/* ── Top Left: Mode Tag (3D OCEAN) & Tactical Legend ── */}
         <div className="relative z-20 flex items-start gap-3">
-          {/* 2D / 3D Pill Toggle */}
-          <div className="flex bg-[#0c1220]/90 backdrop-blur-xl p-1 rounded-2xl border border-white/10 shadow-xl font-mono text-xs">
-            <button
-              onClick={() => setViewMode('3D')}
-              className={`px-3.5 py-1 rounded-xl font-bold transition-all ${
-                viewMode === '3D'
-                  ? 'bg-cyan-400 text-black shadow-md'
-                  : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              3D OCEAN
-            </button>
-            <button
-              onClick={() => setViewMode('2D')}
-              className={`px-3.5 py-1 rounded-xl font-bold transition-all ${
-                viewMode === '2D'
-                  ? 'bg-cyan-400 text-black shadow-md'
-                  : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              2D GRID
-            </button>
+          {/* 3D OCEAN Tag */}
+          <div className="flex items-center gap-2 bg-[#0c1220]/90 backdrop-blur-xl px-3.5 py-1.5 rounded-xl border border-cyan-500/30 shadow-xl font-mono text-xs font-bold text-cyan-300">
+            <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse shadow-[0_0_6px_#22d3ee]" />
+            <span>3D OCEAN</span>
           </div>
 
           {/* Tactical Legend Card */}
@@ -190,11 +166,11 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onExplore, onSelectView 
 
               {/* Downward Tether Line to Ocean Floor */}
               <div
-                className="w-px h-6 mx-auto border-r border-dashed"
+                className="w-px h-5 mx-auto border-r border-dashed"
                 style={{ borderColor: wp.color }}
               />
               <div
-                className="w-2.5 h-2.5 rounded-full mx-auto shadow-md"
+                className="w-2 h-2 rounded-full mx-auto shadow-md"
                 style={{ backgroundColor: wp.color }}
               />
             </div>
@@ -202,7 +178,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onExplore, onSelectView 
         })}
 
         {/* ── Center Target Telemetry Banner ── */}
-        <div className="relative z-20 self-center bg-[#0a101e]/95 backdrop-blur-xl border border-white/15 px-6 py-2 rounded-2xl shadow-2xl flex items-center gap-4 text-xs font-mono">
+        <div className="relative z-20 self-center bg-[#0a101e]/95 backdrop-blur-xl border border-white/15 px-6 py-1.5 rounded-2xl shadow-2xl flex items-center gap-4 text-xs font-mono">
           <div className="flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping" />
             <span className="text-slate-400 uppercase text-[10px]">LOCKED TARGET:</span>
@@ -221,36 +197,36 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onExplore, onSelectView 
         </div>
 
         {/* ── Top Right Map Zoom Controls ── */}
-        <div className="absolute top-6 right-6 z-20 flex flex-col gap-2">
+        <div className="absolute top-5 right-5 z-20 flex flex-col gap-2">
           <button
             onClick={onExplore}
-            className="w-9 h-9 rounded-xl bg-[#0c1220]/90 border border-white/10 flex items-center justify-center text-slate-300 hover:text-white hover:border-cyan-400 transition-all shadow-lg"
+            className="w-8 h-8 rounded-xl bg-[#0c1220]/90 border border-white/10 flex items-center justify-center text-slate-300 hover:text-white hover:border-cyan-400 transition-all shadow-lg"
           >
-            <Plus className="w-4 h-4" />
+            <Plus className="w-3.5 h-3.5" />
           </button>
           <button
             onClick={onExplore}
-            className="w-9 h-9 rounded-xl bg-[#0c1220]/90 border border-white/10 flex items-center justify-center text-slate-300 hover:text-white hover:border-cyan-400 transition-all shadow-lg"
+            className="w-8 h-8 rounded-xl bg-[#0c1220]/90 border border-white/10 flex items-center justify-center text-slate-300 hover:text-white hover:border-cyan-400 transition-all shadow-lg"
           >
-            <Minus className="w-4 h-4" />
+            <Minus className="w-3.5 h-3.5" />
           </button>
           <button
             onClick={onExplore}
-            className="w-9 h-9 rounded-xl bg-[#0c1220]/90 border border-white/10 flex items-center justify-center text-slate-300 hover:text-white hover:border-cyan-400 transition-all shadow-lg"
+            className="w-8 h-8 rounded-xl bg-[#0c1220]/90 border border-white/10 flex items-center justify-center text-slate-300 hover:text-white hover:border-cyan-400 transition-all shadow-lg"
           >
-            <Crosshair className="w-4 h-4 text-cyan-400" />
+            <Crosshair className="w-3.5 h-3.5 text-cyan-400" />
           </button>
         </div>
       </div>
 
       {/* ── BOTTOM SECTION: 4 PRECISION TACTICAL MISSION CARDS ── */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mt-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3.5 h-[215px] shrink-0">
         {/* 1. MAP OVERVIEW (MINI RADAR SWEEP) */}
         <div
           onClick={() => selectTab('explorer')}
-          className="bg-[#0c111c] border border-white/[0.08] hover:border-cyan-400/40 rounded-3xl p-5 cursor-pointer group transition-all shadow-xl flex flex-col justify-between"
+          className="bg-[#0c111c] border border-white/[0.08] hover:border-cyan-400/40 rounded-2xl p-3.5 md:p-4 cursor-pointer group transition-all shadow-xl flex flex-col justify-between h-full"
         >
-          <div className="flex items-center justify-between pb-3 border-b border-white/[0.06]">
+          <div className="flex items-center justify-between pb-2 border-b border-white/[0.06]">
             <span className="text-[11px] font-bold font-mono tracking-wider text-slate-400 uppercase">
               MAP OVERVIEW
             </span>
@@ -259,13 +235,13 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onExplore, onSelectView 
             </span>
           </div>
 
-          <div className="relative h-28 my-2 flex items-center justify-center overflow-hidden rounded-2xl bg-[#060911]">
-            <div className="absolute w-24 h-24 rounded-full border border-cyan-500/20" />
-            <div className="absolute w-16 h-16 rounded-full border border-cyan-500/30" />
+          <div className="relative h-20 my-1 flex items-center justify-center overflow-hidden rounded-xl bg-[#060911]">
+            <div className="absolute w-20 h-20 rounded-full border border-cyan-500/20" />
+            <div className="absolute w-14 h-14 rounded-full border border-cyan-500/30" />
             <div className="absolute w-8 h-8 rounded-full border border-cyan-500/40" />
             <div className="w-1.5 h-1.5 rounded-full bg-cyan-400 shadow-[0_0_8px_#22d3ee]" />
 
-            <div className="absolute w-24 h-24 rounded-full radar-sweep-beam">
+            <div className="absolute w-20 h-20 rounded-full radar-sweep-beam">
               <div
                 className="w-1/2 h-1/2 absolute top-0 right-0 origin-bottom-left"
                 style={{
@@ -274,19 +250,19 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onExplore, onSelectView 
               />
             </div>
 
-            <span className="absolute bottom-2 text-[10px] font-mono text-slate-500">
+            <span className="absolute bottom-1.5 text-[9px] font-mono text-slate-500">
               NORTH INDIAN OCEAN
             </span>
           </div>
 
-          <div className="flex justify-between items-center text-xs font-mono pt-2 border-t border-white/[0.06]">
+          <div className="flex justify-between items-center text-xs font-mono pt-1.5 border-t border-white/[0.06]">
             <div>
-              <div className="text-[10px] text-slate-500">COVERAGE</div>
-              <div className="font-bold text-white">8.37M KM²</div>
+              <div className="text-[9px] text-slate-500">COVERAGE</div>
+              <div className="font-bold text-white text-[11px]">8.37M KM²</div>
             </div>
-            <div>
-              <div className="text-[10px] text-slate-500">SCAN PROBES</div>
-              <div className="font-bold text-cyan-400">142 ARGO</div>
+            <div className="text-right">
+              <div className="text-[9px] text-slate-500">SCAN PROBES</div>
+              <div className="font-bold text-cyan-400 text-[11px]">142 ARGO</div>
             </div>
           </div>
         </div>
@@ -294,9 +270,9 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onExplore, onSelectView 
         {/* 2. WATER COLUMN & STRATIFICATION ANALYSIS */}
         <div
           onClick={() => selectTab('dive')}
-          className="bg-[#0c111c] border border-white/[0.08] hover:border-cyan-400/40 rounded-3xl p-5 cursor-pointer group transition-all shadow-xl flex flex-col justify-between"
+          className="bg-[#0c111c] border border-white/[0.08] hover:border-cyan-400/40 rounded-2xl p-3.5 md:p-4 cursor-pointer group transition-all shadow-xl flex flex-col justify-between h-full"
         >
-          <div className="flex items-center justify-between pb-3 border-b border-white/[0.06]">
+          <div className="flex items-center justify-between pb-2 border-b border-white/[0.06]">
             <span className="text-[11px] font-bold font-mono tracking-wider text-slate-400 uppercase">
               DEPTH ANALYSIS
             </span>
@@ -305,39 +281,39 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onExplore, onSelectView 
             </span>
           </div>
 
-          <div className="space-y-2.5 my-2 text-xs font-mono">
+          <div className="space-y-1.5 my-1 text-xs font-mono">
             <div>
-              <div className="flex justify-between text-[11px] mb-1">
+              <div className="flex justify-between text-[10px] mb-0.5">
                 <span className="text-slate-400">Mixed Layer (MLD)</span>
                 <span className="font-bold text-cyan-400">54 m</span>
               </div>
-              <div className="w-full h-2 rounded-full bg-[#162032] overflow-hidden">
+              <div className="w-full h-1.5 rounded-full bg-[#162032] overflow-hidden">
                 <div className="h-full bg-gradient-to-r from-cyan-500 to-teal-400 rounded-full w-[65%]" />
               </div>
             </div>
 
             <div>
-              <div className="flex justify-between text-[11px] mb-1">
+              <div className="flex justify-between text-[10px] mb-0.5">
                 <span className="text-slate-400">D20 Isotherm Base</span>
                 <span className="font-bold text-amber-400">78 m</span>
               </div>
-              <div className="w-full h-2 rounded-full bg-[#162032] overflow-hidden">
+              <div className="w-full h-1.5 rounded-full bg-[#162032] overflow-hidden">
                 <div className="h-full bg-gradient-to-r from-amber-500 to-orange-400 rounded-full w-[45%]" />
               </div>
             </div>
 
             <div>
-              <div className="flex justify-between text-[11px] mb-1">
+              <div className="flex justify-between text-[10px] mb-0.5">
                 <span className="text-slate-400">MHW Over-Heated Area</span>
                 <span className="font-bold text-red-400">32%</span>
               </div>
-              <div className="w-full h-2 rounded-full bg-[#162032] overflow-hidden">
+              <div className="w-full h-1.5 rounded-full bg-[#162032] overflow-hidden">
                 <div className="h-full bg-gradient-to-r from-red-500 to-rose-400 rounded-full w-[32%]" />
               </div>
             </div>
           </div>
 
-          <div className="flex justify-between items-center text-xs font-mono pt-2 border-t border-white/[0.06]">
+          <div className="flex justify-between items-center text-[11px] font-mono pt-1.5 border-t border-white/[0.06]">
             <span className="text-slate-500">MAX SCAN:</span>
             <span className="font-bold text-white">1000m (Abyss)</span>
           </div>
@@ -346,9 +322,9 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onExplore, onSelectView 
         {/* 3. THREAT & MHW ANOMALY GAUGE */}
         <div
           onClick={() => selectTab('intelligence')}
-          className="bg-[#0c111c] border border-white/[0.08] hover:border-amber-400/40 rounded-3xl p-5 cursor-pointer group transition-all shadow-xl flex flex-col justify-between"
+          className="bg-[#0c111c] border border-white/[0.08] hover:border-amber-400/40 rounded-2xl p-3.5 md:p-4 cursor-pointer group transition-all shadow-xl flex flex-col justify-between h-full"
         >
-          <div className="flex items-center justify-between pb-3 border-b border-white/[0.06]">
+          <div className="flex items-center justify-between pb-2 border-b border-white/[0.06]">
             <span className="text-[11px] font-bold font-mono tracking-wider text-slate-400 uppercase">
               MHW THREAT DETECTION
             </span>
@@ -357,8 +333,8 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onExplore, onSelectView 
             </span>
           </div>
 
-          <div className="relative h-24 my-2 flex flex-col items-center justify-center">
-            <svg className="w-40 h-20" viewBox="0 0 160 80">
+          <div className="relative h-20 my-1 flex flex-col items-center justify-center">
+            <svg className="w-36 h-18" viewBox="0 0 160 80">
               <path
                 d="M 10 80 A 70 70 0 0 1 150 80"
                 fill="none"
@@ -382,24 +358,24 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onExplore, onSelectView 
               </defs>
             </svg>
 
-            <div className="absolute top-7 text-center">
-              <div className="text-2xl font-black font-mono text-white">03</div>
-              <div className="text-[9px] font-mono text-amber-400 font-bold tracking-widest">
+            <div className="absolute top-6 text-center">
+              <div className="text-xl font-black font-mono text-white">03</div>
+              <div className="text-[8px] font-mono text-amber-400 font-bold tracking-widest">
                 MHW THREATS
               </div>
             </div>
           </div>
 
-          <div className="grid grid-cols-3 gap-1 text-[10px] font-mono pt-2 border-t border-white/[0.06] text-center">
-            <div className="bg-[#121927] p-1.5 rounded-xl">
+          <div className="grid grid-cols-3 gap-1 text-[9px] font-mono pt-1.5 border-t border-white/[0.06] text-center">
+            <div className="bg-[#121927] p-1 rounded-lg">
               <div className="text-slate-500">MHW</div>
               <div className="text-red-400 font-bold">+2.1°C</div>
             </div>
-            <div className="bg-[#121927] p-1.5 rounded-xl">
+            <div className="bg-[#121927] p-1 rounded-lg">
               <div className="text-slate-500">CYCLONE</div>
               <div className="text-amber-400 font-bold">85%</div>
             </div>
-            <div className="bg-[#121927] p-1.5 rounded-xl">
+            <div className="bg-[#121927] p-1 rounded-lg">
               <div className="text-slate-500">UPPER OHC</div>
               <div className="text-cyan-400 font-bold">+18%</div>
             </div>
@@ -409,9 +385,9 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onExplore, onSelectView 
         {/* 4. ARGO FLOAT MISSION TELEMETRY */}
         <div
           onClick={() => selectTab('truth-check')}
-          className="bg-[#0c111c] border border-white/[0.08] hover:border-cyan-400/40 rounded-3xl p-5 cursor-pointer group transition-all shadow-xl flex flex-col justify-between"
+          className="bg-[#0c111c] border border-white/[0.08] hover:border-cyan-400/40 rounded-2xl p-3.5 md:p-4 cursor-pointer group transition-all shadow-xl flex flex-col justify-between h-full"
         >
-          <div className="flex items-center justify-between pb-3 border-b border-white/[0.06]">
+          <div className="flex items-center justify-between pb-2 border-b border-white/[0.06]">
             <span className="text-[11px] font-bold font-mono tracking-wider text-slate-400 uppercase">
               FLOAT TELEMETRY
             </span>
@@ -420,7 +396,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onExplore, onSelectView 
             </span>
           </div>
 
-          <div className="my-2 space-y-2 text-xs font-mono">
+          <div className="my-1 space-y-1 text-[11px] font-mono">
             <div className="flex justify-between">
               <span className="text-slate-400">PROBE ID:</span>
               <span className="font-bold text-white">WMO #6904117</span>
@@ -435,7 +411,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onExplore, onSelectView 
             </div>
 
             <div>
-              <div className="flex justify-between text-[10px] text-slate-400 mb-1">
+              <div className="flex justify-between text-[9px] text-slate-400 mb-0.5">
                 <span>BATTERY & SENSOR HEALTH</span>
                 <span className="text-emerald-400 font-bold">84.2%</span>
               </div>
@@ -450,7 +426,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onExplore, onSelectView 
               e.stopPropagation();
               onExplore();
             }}
-            className="w-full py-2.5 rounded-xl text-xs font-bold font-mono bg-cyan-400 hover:bg-cyan-300 text-black flex items-center justify-center gap-1.5 transition-all shadow-md"
+            className="w-full py-1.5 rounded-xl text-xs font-bold font-mono bg-cyan-400 hover:bg-cyan-300 text-black flex items-center justify-center gap-1.5 transition-all shadow-md mt-1"
           >
             <span>LAUNCH MISSION HUD</span>
             <ArrowUpRight className="w-3.5 h-3.5" />
