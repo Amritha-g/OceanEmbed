@@ -265,7 +265,7 @@ def metrics():
 
 
 @v1.post("/reconstruct")
-def reconstruct(req: ReconstructRequest):
+async def reconstruct(req: ReconstructRequest):
     lon = req.lng if req.lng is not None else req.lon
     if lon is None:
         logger.error("Reconstruct rejected: missing lng/lon")
@@ -273,8 +273,8 @@ def reconstruct(req: ReconstructRequest):
 
     logger.info("Received /api/v1/reconstruct request for coordinates (%.4f°N, %.4f°E, date=%s, region=%s)", req.lat, lon, req.date, req.region)
 
-    # 1. Fetch live hybrid marine feeds
-    live_feed = get_live_surface_inputs(req.lat, lon, req.region)
+    # 1. Fetch live async hybrid marine feeds
+    live_feed = await get_live_surface_inputs(req.lat, lon, req.region)
     src = req.surface.model_dump() if req.surface else {}
     
     # 2. Allow optional client overrides if explicitly provided
