@@ -223,6 +223,7 @@ All RMSE figures are on the held-out test days (20–31 March 2024), ocean cells
 
 ### Serving and frontend
 - **`/api/v1/profile` added.** It snaps the requested point to the nearest ocean cell and runs the model on the full grid with that day's real satellite inputs. The old endpoint fed a zero-padded 1×1 input the model never saw in training. The response includes the GLORYS12 truth and a per-depth uncertainty (the test RMSE).
+- **Experimental live inputs (`source=live`).** `/api/v1/profile?source=live` and `/reconstruct` with `"source": "live"` replace SST, currents and winds with current Open-Meteo readings (`model/live_feed.py`). Open-Meteo has no salinity or sea level, so those stay at the latest archive day. Every response carries per-field `lineage` (source, date, live flag), and live responses drop the GLORYS truth and carry a `warning`. Open-Meteo is not one of the training sources and the model has only seen Feb–Mar 2024, so treat live output as indicative. Explorer and Reconstruction have an Archive / Live toggle.
 - **Frontend screens use the live model.** Explorer, Ocean Dive, Reconstruction and Truth Check use the model and real inputs when the API is up, and fall back to the physics engine when it is not. Truth Check now compares against GLORYS12 instead of a simulated float.
 
 ---

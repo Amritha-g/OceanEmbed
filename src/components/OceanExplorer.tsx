@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import L from 'leaflet';
 import { useNeuralProfile } from '../hooks/useNeuralProfile';
-import { DEFAULT_DATE } from '../utils/api';
+import { DataSource, DEFAULT_DATE, describeLineage, SurfaceField } from '../utils/api';
+import { SourceToggle } from './SourceToggle';
 import {
   Layers, ChevronRight, Anchor,
   Sun, Moon, Globe, Eye, EyeOff, Activity
@@ -86,9 +87,12 @@ export const OceanExplorer: React.FC<OceanExplorerProps> = ({
 
   const currentRegion = REGION_CONFIGS[selectedRegion];
   const physicsVars = getPhysicalVariables(selectedPoint.lat, selectedPoint.lng, selectedRegion);
-  const { result: neural } = useNeuralProfile(selectedPoint.lat, selectedPoint.lng, selectedRegion);
-  // Inside the dataset domain, show the real satellite inputs and the model's mixed-layer depth
-  const activeVars = neural?.in_domain
+  const [dataSource, setDataSource] = useState<DataSource>('archive');
+  const { result: neural, status: neuralStatus } = useNeuralProfile(
+    selectedPoint.lat, selectedPoint.lng, selectedRegion, undefined, dataSource);
+  // Show the model's actual inputs when they are real data (in-domain archive, or live readings)
+  const useNeuralInputs = !!neural && (neural.in_domain || neural.source_mode === 'live');
+  const activeVars = useNeuralInputs && neural
     ? {
         ...physicsVars,
         sst: neural.surface.sst.toFixed(2),
@@ -621,9 +625,19 @@ export const OceanExplorer: React.FC<OceanExplorerProps> = ({
                     <div className="text-base font-bold text-cyan-300 text-glow">
                       {selectedPoint.lat.toFixed(4)}° N, {selectedPoint.lng.toFixed(4)}° E
                     </div>
-                    <div className="text-[10px] text-slate-400 mt-1">
-                      Region: <span className="text-slate-200">{currentRegion.name}</span>
+                    <div className="flex items-center justify-between text-[10px] text-slate-400 mt-1">
+                      <span>Region: <span className="text-slate-200">{currentRegion.name}</span></span>
+                      {neural && <span className="text-emerald-400/90 font-mono">{neural.inference_latency_ms} ms</span>}
                     </div>
+                    <div className="flex items-center justify-between mt-2">
+                      <SourceToggle value={dataSource} onChange={setDataSource} />
+                      <span className="text-[9px] font-mono text-slate-400">
+                        {neuralStatus === 'loading' ? 'loading…' : neuralStatus === 'live' ? 'neural model' : 'physics sim (API offline)'}
+                      </span>
+                    </div>
+                    {neural?.warning && (
+                      <div className="mt-2 text-[9px] leading-snug text-amber-300/90">⚠ {neural.warning}</div>
+                    )}
                   </div>
 
                   {/* Surface Variables Readout */}
@@ -632,13 +646,17 @@ export const OceanExplorer: React.FC<OceanExplorerProps> = ({
                       Surface Satellite Inputs (X)
                     </div>
                     <div className="space-y-1.5">
-                      {[
-                        ['Sea Surface Temp (SST)', `${activeVars.sst} °C`, 'OSTIA / L4'],
-                        ['Sea Surface Salinity (SSS)', `${activeVars.sss} PSU`, 'GLORYS12'],
-                        ['Sea Level Anomaly (SSH)', `${activeVars.ssh} m`, 'DUACS'],
-                        ['Current Speed (U/V)', `${activeVars.current} m/s`, 'GLORYS12'],
-                        ['Surface Winds (10m)', `${activeVars.wind} m/s`, 'CCMP V3.1'],
-                      ].map(([label, val, src]) => (
+                      {([
+                        ['Sea Surface Temp (SST)', `${activeVars.sst} °C`, 'sst'],
+                        ['Sea Surface Salinity (SSS)', `${activeVars.sss} PSU`, 'sss'],
+                        ['Sea Level Anomaly (SSH)', `${activeVars.ssh} m`, 'sla'],
+                        ['Current Speed (U/V)', `${activeVars.current} m/s`, 'u_cur'],
+                        ['Surface Winds (10m)', `${activeVars.wind} m/s`, 'u_wind'],
+                      ] as [string, string, SurfaceField][]).map(([label, val, field]) => [
+                        label,
+                        val,
+                        (useNeuralInputs && describeLineage(neural?.lineage?.[field])) || 'Physics simulation',
+                      ]).map(([label, val, src]) => (
                         <div key={label} className="flex items-center justify-between p-2.5 rounded-lg bg-[#061226]/80 border border-cyan-500/15">
                           <div>
                             <div className="text-[11px] text-slate-200">{label}</div>

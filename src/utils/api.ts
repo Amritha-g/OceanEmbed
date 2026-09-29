@@ -2,6 +2,17 @@ import { ActiveRegion, SurfaceInputs } from './oceanPhysics';
 
 const API_BASE = ((import.meta as unknown as { env?: Record<string, string> }).env?.VITE_API_URL) ?? '/api/v1';
 
+export type DataSource = 'archive' | 'live';
+
+export interface FieldLineage {
+  source: string;
+  /** Day (archive) or observation time (live); null for synthetic or client values */
+  date: string | null;
+  live: boolean;
+}
+
+export type SurfaceField = keyof SurfaceInputs;
+
 export interface ReconstructResponse {
   depths_m: number[];
   temperatures: number[];
@@ -18,6 +29,12 @@ export interface ReconstructResponse {
   date_exact: boolean;
   region?: string;
   source: 'neural';
+  source_mode: DataSource;
+  lineage: Record<SurfaceField, FieldLineage>;
+  /** Live mode only: fields Open-Meteo actually returned */
+  live_fields?: SurfaceField[];
+  warning?: string;
+  inference_latency_ms: number;
   in_domain: boolean;
   surface_synthesized: boolean;
   grid_point: { lat: number; lng: number; snap_km: number } | null;
@@ -81,8 +98,9 @@ export async function fetchProfile(
   lng: number,
   region?: ActiveRegion,
   date = DEFAULT_DATE,
+  source: DataSource = 'archive',
 ): Promise<ReconstructResponse> {
-  const params = new URLSearchParams({ lat: String(lat), lon: String(lng), date });
+  const params = new URLSearchParams({ lat: String(lat), lon: String(lng), date, source });
   if (region) params.set('region', region);
   const res = await fetch(`${API_BASE}/profile?${params}`);
   if (!res.ok) {
@@ -99,15 +117,23 @@ export async function reconstructPoint(
   region: ActiveRegion,
   date = DEFAULT_DATE,
   surface: Partial<SurfaceInputs> = {},
+  source: DataSource = 'archive',
 ): Promise<ReconstructResponse> {
   const res = await fetch(`${API_BASE}/reconstruct`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ lat, lng, date, region, surface }),
+    body: JSON.stringify({ lat, lng, date, region, surface, source }),
   });
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`Reconstruction failed (${res.status}): ${text}`);
   }
   return res.json();
+}
+
+/** "Open-Meteo · 2026-09-29 14:45 (live)" / "GLORYS12 (Copernicus) · 2024-03-31" */
+export function describeLineage(l?: FieldLineage): string | undefined {
+  if (!l) return undefined;
+  const when = l.date ? ` · ${l.date.replace('T', ' ')}` : '';
+  return `${l.source}${when}${l.live ? ' (live)' : ''}`;
 }

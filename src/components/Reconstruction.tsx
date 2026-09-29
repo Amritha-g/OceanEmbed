@@ -3,6 +3,8 @@ import { ArrowLeft, Cpu, Layers, Sparkles, Database, CheckCircle2, Sliders, Radi
 import { getSurfaceInputs, getDepthProfile } from '../utils/oceanPhysics';
 import { useNeuralProfile } from '../hooks/useNeuralProfile';
 import { useModelMetrics } from '../hooks/useModelMetrics';
+import { DataSource, describeLineage, SurfaceField } from '../utils/api';
+import { SourceToggle } from './SourceToggle';
 
 interface ReconstructionProps {
   coordinates: { lat: number; lng: number };
@@ -15,21 +17,24 @@ export const Reconstruction: React.FC<ReconstructionProps> = ({ coordinates, onB
   const [activeEmbeddingLayer, setActiveEmbeddingLayer] = useState<number>(2);
 
   const physicsProfile = getDepthProfile(coordinates.lat, coordinates.lng, 'bob');
-  const { result, status } = useNeuralProfile(coordinates.lat, coordinates.lng, 'bob');
+  const [source, setSource] = useState<DataSource>('archive');
+  const { result, status } = useNeuralProfile(coordinates.lat, coordinates.lng, 'bob', undefined, source);
   const { metrics } = useModelMetrics();
   // Real satellite inputs at the snapped grid cell when the model is live, otherwise the synthetic estimate
   const surface = result?.surface ?? getSurfaceInputs(coordinates.lat, coordinates.lng, 'bob');
+  // Per-field origin from the API; falls back to the static description when offline
+  const origin = (f: SurfaceField, fallback: string) => describeLineage(result?.lineage?.[f]) ?? fallback;
   const testRmse = metrics?.validation?.overall.rmse ?? result?.model.test_rmse_c;
   const params = metrics?.model.parameters ?? result?.model.parameters;
 
   const inputChannels = [
-    { id: 'sst', name: 'SST (OSTIA)', value: surface.sst.toFixed(2), unit: '°C', desc: 'Operational Sea Surface Temp', color: 'text-cyan-400', border: 'border-cyan-500/30' },
-    { id: 'sss', name: 'SSS (GLORYS12)', value: surface.sss.toFixed(2), unit: 'PSU', desc: 'Sea Surface Practical Salinity', color: 'text-emerald-400', border: 'border-emerald-500/30' },
-    { id: 'ssh', name: 'SSH / SLA (DUACS)', value: `${surface.sla >= 0 ? '+' : ''}${surface.sla.toFixed(2)}`, unit: 'm', desc: 'Sea Surface Height Anomaly', color: 'text-sky-400', border: 'border-sky-500/30' },
-    { id: 'u_curr', name: 'Current U (GLORYS)', value: `${surface.u_cur >= 0 ? '+' : ''}${surface.u_cur.toFixed(2)}`, unit: 'm/s', desc: 'Zonal Surface Velocity', color: 'text-blue-400', border: 'border-blue-500/30' },
-    { id: 'v_curr', name: 'Current V (GLORYS)', value: `${surface.v_cur >= 0 ? '+' : ''}${surface.v_cur.toFixed(2)}`, unit: 'm/s', desc: 'Meridional Surface Velocity', color: 'text-blue-400', border: 'border-blue-500/30' },
-    { id: 'u_wind', name: 'Wind U (CCMP)', value: `${surface.u_wind >= 0 ? '+' : ''}${surface.u_wind.toFixed(1)}`, unit: 'm/s', desc: 'Cross-Calibrated Zonal Wind', color: 'text-violet-400', border: 'border-violet-500/30' },
-    { id: 'v_wind', name: 'Wind V (CCMP)', value: `${surface.v_wind >= 0 ? '+' : ''}${surface.v_wind.toFixed(1)}`, unit: 'm/s', desc: 'Cross-Calibrated Meridional Wind', color: 'text-violet-400', border: 'border-violet-500/30' },
+    { id: 'sst', name: 'SST', value: surface.sst.toFixed(2), unit: '°C', desc: origin('sst', 'Operational Sea Surface Temp'), color: 'text-cyan-400', border: 'border-cyan-500/30' },
+    { id: 'sss', name: 'SSS', value: surface.sss.toFixed(2), unit: 'PSU', desc: origin('sss', 'Sea Surface Practical Salinity'), color: 'text-emerald-400', border: 'border-emerald-500/30' },
+    { id: 'ssh', name: 'SSH / SLA', value: `${surface.sla >= 0 ? '+' : ''}${surface.sla.toFixed(2)}`, unit: 'm', desc: origin('sla', 'Sea Surface Height Anomaly'), color: 'text-sky-400', border: 'border-sky-500/30' },
+    { id: 'u_curr', name: 'Current U', value: `${surface.u_cur >= 0 ? '+' : ''}${surface.u_cur.toFixed(2)}`, unit: 'm/s', desc: origin('u_cur', 'Zonal Surface Velocity'), color: 'text-blue-400', border: 'border-blue-500/30' },
+    { id: 'v_curr', name: 'Current V', value: `${surface.v_cur >= 0 ? '+' : ''}${surface.v_cur.toFixed(2)}`, unit: 'm/s', desc: origin('v_cur', 'Meridional Surface Velocity'), color: 'text-blue-400', border: 'border-blue-500/30' },
+    { id: 'u_wind', name: 'Wind U', value: `${surface.u_wind >= 0 ? '+' : ''}${surface.u_wind.toFixed(1)}`, unit: 'm/s', desc: origin('u_wind', 'Cross-Calibrated Zonal Wind'), color: 'text-violet-400', border: 'border-violet-500/30' },
+    { id: 'v_wind', name: 'Wind V', value: `${surface.v_wind >= 0 ? '+' : ''}${surface.v_wind.toFixed(1)}`, unit: 'm/s', desc: origin('v_wind', 'Cross-Calibrated Meridional Wind'), color: 'text-violet-400', border: 'border-violet-500/30' },
   ];
 
   const depthOutputs = physicsProfile.map((pt, i) => {
@@ -60,18 +65,29 @@ export const Reconstruction: React.FC<ReconstructionProps> = ({ coordinates, onB
         </div>
 
         <div className="flex items-center gap-2">
-          <span className="roadmap-badge flex items-center gap-1">
+          <SourceToggle value={source} onChange={setSource} />
+          <span className="roadmap-badge flex items-center gap-1" title={result?.warning}>
             <Radio className={`w-3 h-3 ${status === 'live' ? 'text-emerald-400 animate-pulse' : 'text-cyan-400'}`} />
-            {status === 'live' ? 'Neural Live Model' : 'Ocean Physics Engine'}
+            {status === 'loading'
+              ? 'Loading…'
+              : status === 'live'
+                ? result?.source_mode === 'live' ? 'Neural Model · Live Inputs (exp.)' : 'Neural Model · Archive'
+                : 'Ocean Physics Engine'}
           </span>
           <div className="flex items-center gap-1.5 bg-accent/10 border border-accent/30 px-3 py-1 rounded-lg text-[10px] font-mono text-accent">
             <Cpu className="w-3 h-3" />
             <span>
-              {result?.date ? `${result.date} | ` : ''}TEST RMSE: {testRmse !== undefined && testRmse !== null ? `${testRmse.toFixed(3)}°C` : '—'}
+              {result?.date ? `${result.date} | ` : ''}{result ? `${result.inference_latency_ms} ms | ` : ''}TEST RMSE: {testRmse !== undefined && testRmse !== null ? `${testRmse.toFixed(3)}°C` : '—'}
             </span>
           </div>
         </div>
       </div>
+
+      {result?.warning && (
+        <div className="px-5 py-1.5 bg-amber-500/10 border-b border-amber-500/25 text-[10px] font-mono text-amber-300 shrink-0">
+          ⚠ {result.warning}
+        </div>
+      )}
 
       {/* Main Workspace */}
       <div className="flex-1 overflow-y-auto">
