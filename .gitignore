@@ -33,15 +33,18 @@ dist-ssr/
 *.sln
 *.sw?
 
-# Environment variables
+# Environment variables (keep committed templates such as .env.example)
 .env
+.env.*
+!.env.example
 
 # Raw datasets (too large / not for repo)
 data/raw/
 
-# Python cache and environments
+# Python cache
 __pycache__/
 *.pyc
+
+# Python virtualenv
 .venv/
 venv/
-.env*

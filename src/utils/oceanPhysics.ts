@@ -296,6 +296,18 @@ export const getDepthProfile = (lat: number, lng: number, region?: ActiveRegion)
   });
 };
 
+/** Mixed-layer depth by the ΔT = 0.5 °C criterion, linearly interpolated between levels. */
+export const mixedLayerDepth = (depths: number[], temps: number[]): number => {
+  const threshold = temps[0] - 0.5;
+  for (let i = 1; i < temps.length; i++) {
+    if (temps[i] < threshold) {
+      const f = (temps[i - 1] - threshold) / (temps[i - 1] - temps[i]);
+      return Math.round(depths[i - 1] + f * (depths[i] - depths[i - 1]));
+    }
+  }
+  return depths[depths.length - 1];
+};
+
 export interface SurfaceInputs {
   sst: number;
   sss: number;

@@ -1,5 +1,6 @@
 import React, { useRef } from 'react';
-import { Canvas, useFrame } from '@react-three/fiber';
+import { useFrame } from '@react-three/fiber';
+import { SafeCanvas } from './SafeCanvas';
 import * as THREE from 'three';
 
 const GlowingGlobe: React.FC = () => {
@@ -57,10 +58,10 @@ const GlowingGlobe: React.FC = () => {
 export const WireframeGlobe: React.FC = () => {
   return (
     <div className="w-full h-full absolute inset-0 pointer-events-none flex items-center justify-center">
-      <Canvas camera={{ position: [0, 0, 6.8], fov: 42 }} gl={{ antialias: true, alpha: true }}>
+      <SafeCanvas camera={{ position: [0, 0, 6.8], fov: 42 }} gl={{ antialias: true, alpha: true }}>
         <ambientLight intensity={0.8} />
         <GlowingGlobe />
-      </Canvas>
+      </SafeCanvas>
     </div>
   );
 };

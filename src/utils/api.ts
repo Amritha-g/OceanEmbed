@@ -2,26 +2,50 @@ import { ActiveRegion, SurfaceInputs } from './oceanPhysics';
 
 const API_BASE = ((import.meta as unknown as { env?: Record<string, string> }).env?.VITE_API_URL) ?? '/api/v1';
 
+export type DataSource = 'archive' | 'live';
+
+export interface FieldLineage {
+  source: string;
+  /** Day (archive) or observation time (live); null for synthetic or client values */
+  date: string | null;
+  live: boolean;
+}
+
+export type SurfaceField = keyof SurfaceInputs;
+
 export interface ReconstructResponse {
   depths_m: number[];
   temperatures: number[];
+  /** GLORYS12 reanalysis profile at the same grid cell/day; null below the seafloor or outside the domain */
+  truth: Array<number | null> | null;
+  valid_depths: boolean[];
+  seafloor_depth_m: number | null;
+  /** Per-depth test RMSE (°C), usable as a ±1σ band */
+  uncertainty_c: number[] | null;
   embedding: number[];
   embedding_dim: number;
-  surface: SurfaceInputs & { doy: number };
+  surface: SurfaceInputs & { lat: number; lng: number; doy: number };
   date?: string;
+  date_exact: boolean;
   region?: string;
   source: 'neural';
-  is_live?: boolean;
-  source_provider?: string;
-  lineage?: Record<string, string>;
-  inference_latency_ms?: number;
+  source_mode: DataSource;
+  lineage: Record<SurfaceField, FieldLineage>;
+  /** Live mode only: fields Open-Meteo actually returned */
+  live_fields?: SurfaceField[];
+  warning?: string;
+  inference_latency_ms: number;
+  in_domain: boolean;
   surface_synthesized: boolean;
+  grid_point: { lat: number; lng: number; snap_km: number } | null;
   model: {
     name: string;
     architecture: string;
     parameters: number;
     val_rmse_c: number | null;
     val_mae_c: number | null;
+    test_rmse_c: number | null;
+    test_mae_c: number | null;
     epoch: number | null;
     trained: boolean;
     device: string;
@@ -39,6 +63,8 @@ export interface MetricsResponse {
   final_val_rmse?: number;
   epochs?: number;
   validation?: {
+    split?: { method: string; train: [string, string]; val: [string, string]; test: [string, string] };
+    baselines?: Record<string, { rmse: number; mae: number; bias: number; corr: number }>;
     overall: { rmse: number; mae: number; bias: number; corr: number; meets_sih_target: boolean };
     per_depth: Array<{ depth_m: number; rmse: number; mae: number; bias: number; corr: number }>;
   };
@@ -65,31 +91,49 @@ export async function fetchMetrics(): Promise<MetricsResponse | null> {
   }
 }
 
+export const DEFAULT_DATE = '2024-03-15';
+
+export async function fetchProfile(
+  lat: number,
+  lng: number,
+  region?: ActiveRegion,
+  date = DEFAULT_DATE,
+  source: DataSource = 'archive',
+): Promise<ReconstructResponse> {
+  const params = new URLSearchParams({ lat: String(lat), lon: String(lng), date, source });
+  if (region) params.set('region', region);
+  const res = await fetch(`${API_BASE}/profile?${params}`);
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Profile request failed (${res.status}): ${text}`);
+  }
+  return res.json();
+}
+
+/** Reconstruct with user-supplied surface values; omitted fields come from the satellite grid. */
 export async function reconstructPoint(
   lat: number,
   lng: number,
   region: ActiveRegion,
-  date = '2024-03-15',
-  surfaceOverrides?: Partial<SurfaceInputs>
+  date = DEFAULT_DATE,
+  surface: Partial<SurfaceInputs> = {},
+  source: DataSource = 'archive',
 ): Promise<ReconstructResponse> {
-  const payload: Record<string, any> = {
-    lat,
-    lng,
-    date,
-    region,
-  };
-  if (surfaceOverrides) {
-    Object.assign(payload, surfaceOverrides);
-  }
-
   const res = await fetch(`${API_BASE}/reconstruct`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
+    body: JSON.stringify({ lat, lng, date, region, surface, source }),
   });
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`Reconstruction failed (${res.status}): ${text}`);
   }
   return res.json();
+}
+
+/** "Open-Meteo · 2026-09-29 14:45 (live)" / "GLORYS12 (Copernicus) · 2024-03-31" */
+export function describeLineage(l?: FieldLineage): string | undefined {
+  if (!l) return undefined;
+  const when = l.date ? ` · ${l.date.replace('T', ' ')}` : '';
+  return `${l.source}${when}${l.live ? ' (live)' : ''}`;
 }

@@ -2,6 +2,9 @@ import React, { useState } from 'react';
 import { ArrowLeft, Cpu, Layers, Sparkles, Database, CheckCircle2, Sliders, Radio } from 'lucide-react';
 import { getSurfaceInputs, getDepthProfile } from '../utils/oceanPhysics';
 import { useNeuralProfile } from '../hooks/useNeuralProfile';
+import { useModelMetrics } from '../hooks/useModelMetrics';
+import { DataSource, describeLineage, SurfaceField } from '../utils/api';
+import { SourceToggle } from './SourceToggle';
 
 interface ReconstructionProps {
   coordinates: { lat: number; lng: number };
@@ -13,84 +16,25 @@ export const Reconstruction: React.FC<ReconstructionProps> = ({ coordinates, onB
   const [selectedChannel, setSelectedChannel] = useState<string>('sst');
   const [activeEmbeddingLayer, setActiveEmbeddingLayer] = useState<number>(2);
 
-  const { result, status } = useNeuralProfile(coordinates.lat, coordinates.lng, 'bob');
-  const activeSurface = result?.surface ?? getSurfaceInputs(coordinates.lat, coordinates.lng, 'bob');
   const physicsProfile = getDepthProfile(coordinates.lat, coordinates.lng, 'bob');
-
-  const lineage = result?.lineage;
-  const isLiveFeed = result?.is_live ?? false;
+  const [source, setSource] = useState<DataSource>('archive');
+  const { result, status } = useNeuralProfile(coordinates.lat, coordinates.lng, 'bob', undefined, source);
+  const { metrics } = useModelMetrics();
+  // Real satellite inputs at the snapped grid cell when the model is live, otherwise the synthetic estimate
+  const surface = result?.surface ?? getSurfaceInputs(coordinates.lat, coordinates.lng, 'bob');
+  // Per-field origin from the API; falls back to the static description when offline
+  const origin = (f: SurfaceField, fallback: string) => describeLineage(result?.lineage?.[f]) ?? fallback;
+  const testRmse = metrics?.validation?.overall.rmse ?? result?.model.test_rmse_c;
+  const params = metrics?.model.parameters ?? result?.model.parameters;
 
   const inputChannels = [
-    { 
-      id: 'sst', 
-      name: isLiveFeed ? 'SST (Open-Meteo Live)' : 'SST (OSTIA Satellite)', 
-      value: activeSurface.sst.toFixed(2), 
-      unit: '°C', 
-      desc: lineage?.sst || 'Operational Sea Surface Temp', 
-      color: 'text-cyan-400', 
-      border: 'border-cyan-500/30',
-      isLive: isLiveFeed
-    },
-    { 
-      id: 'sss', 
-      name: isLiveFeed ? 'SSS (Copernicus NRT)' : 'SSS (GLORYS12)', 
-      value: activeSurface.sss.toFixed(2), 
-      unit: 'PSU', 
-      desc: lineage?.sss || 'Sea Surface Practical Salinity', 
-      color: 'text-emerald-400', 
-      border: 'border-emerald-500/30',
-      isLive: isLiveFeed
-    },
-    { 
-      id: 'ssh', 
-      name: isLiveFeed ? 'SSH/SLA (DUACS Altimetry)' : 'SSH / SLA (DUACS)', 
-      value: `${activeSurface.sla >= 0 ? '+' : ''}${activeSurface.sla.toFixed(2)}`, 
-      unit: 'm', 
-      desc: lineage?.sla || 'Sea Surface Height Anomaly', 
-      color: 'text-sky-400', 
-      border: 'border-sky-500/30',
-      isLive: isLiveFeed
-    },
-    { 
-      id: 'u_curr', 
-      name: isLiveFeed ? 'Current U (Open-Meteo Live)' : 'Current U (GLORYS)', 
-      value: `${activeSurface.u_cur >= 0 ? '+' : ''}${activeSurface.u_cur.toFixed(2)}`, 
-      unit: 'm/s', 
-      desc: lineage?.u_cur || 'Zonal Surface Velocity', 
-      color: 'text-blue-400', 
-      border: 'border-blue-500/30',
-      isLive: isLiveFeed
-    },
-    { 
-      id: 'v_curr', 
-      name: isLiveFeed ? 'Current V (Open-Meteo Live)' : 'Current V (GLORYS)', 
-      value: `${activeSurface.v_cur >= 0 ? '+' : ''}${activeSurface.v_cur.toFixed(2)}`, 
-      unit: 'm/s', 
-      desc: lineage?.v_cur || 'Meridional Surface Velocity', 
-      color: 'text-blue-400', 
-      border: 'border-blue-500/30',
-      isLive: isLiveFeed
-    },
-    { 
-      id: 'u_wind', 
-      name: isLiveFeed ? 'Wind U (Open-Meteo 10m Live)' : 'Wind U (CCMP)', 
-      value: `${activeSurface.u_wind >= 0 ? '+' : ''}${activeSurface.u_wind.toFixed(1)}`, 
-      unit: 'm/s', 
-      desc: lineage?.u_wind || 'Cross-Calibrated Zonal Wind', 
-      color: 'text-violet-400', 
-      border: 'border-violet-500/30',
-      isLive: isLiveFeed
-    },
-    { 
-      id: 'v_wind', 
-      name: isLiveFeed ? 'Wind V (Open-Meteo 10m Live)' : 'Wind V (CCMP)', 
-      value: `${activeSurface.v_wind >= 0 ? '+' : ''}${activeSurface.v_wind.toFixed(1)}`, 
-      unit: 'm/s', 
-      desc: lineage?.v_wind || 'Cross-Calibrated Meridional Wind', 
-      color: 'text-violet-400', 
-      border: 'border-violet-500/30',
-      isLive: isLiveFeed
-    },
+    { id: 'sst', name: 'SST', value: surface.sst.toFixed(2), unit: '°C', desc: origin('sst', 'Operational Sea Surface Temp'), color: 'text-cyan-400', border: 'border-cyan-500/30' },
+    { id: 'sss', name: 'SSS', value: surface.sss.toFixed(2), unit: 'PSU', desc: origin('sss', 'Sea Surface Practical Salinity'), color: 'text-emerald-400', border: 'border-emerald-500/30' },
+    { id: 'ssh', name: 'SSH / SLA', value: `${surface.sla >= 0 ? '+' : ''}${surface.sla.toFixed(2)}`, unit: 'm', desc: origin('sla', 'Sea Surface Height Anomaly'), color: 'text-sky-400', border: 'border-sky-500/30' },
+    { id: 'u_curr', name: 'Current U', value: `${surface.u_cur >= 0 ? '+' : ''}${surface.u_cur.toFixed(2)}`, unit: 'm/s', desc: origin('u_cur', 'Zonal Surface Velocity'), color: 'text-blue-400', border: 'border-blue-500/30' },
+    { id: 'v_curr', name: 'Current V', value: `${surface.v_cur >= 0 ? '+' : ''}${surface.v_cur.toFixed(2)}`, unit: 'm/s', desc: origin('v_cur', 'Meridional Surface Velocity'), color: 'text-blue-400', border: 'border-blue-500/30' },
+    { id: 'u_wind', name: 'Wind U', value: `${surface.u_wind >= 0 ? '+' : ''}${surface.u_wind.toFixed(1)}`, unit: 'm/s', desc: origin('u_wind', 'Cross-Calibrated Zonal Wind'), color: 'text-violet-400', border: 'border-violet-500/30' },
+    { id: 'v_wind', name: 'Wind V', value: `${surface.v_wind >= 0 ? '+' : ''}${surface.v_wind.toFixed(1)}`, unit: 'm/s', desc: origin('v_wind', 'Cross-Calibrated Meridional Wind'), color: 'text-violet-400', border: 'border-violet-500/30' },
   ];
 
   const depthOutputs = physicsProfile.map((pt, i) => {
@@ -121,18 +65,29 @@ export const Reconstruction: React.FC<ReconstructionProps> = ({ coordinates, onB
         </div>
 
         <div className="flex items-center gap-2">
-          <span className="roadmap-badge flex items-center gap-1">
+          <SourceToggle value={source} onChange={setSource} />
+          <span className="roadmap-badge flex items-center gap-1" title={result?.warning}>
             <Radio className={`w-3 h-3 ${status === 'live' ? 'text-emerald-400 animate-pulse' : 'text-cyan-400'}`} />
-            {status === 'live' 
-              ? (isLiveFeed ? 'Live Satellite Feed (Open-Meteo + Copernicus)' : 'Neural Live Model')
-              : 'Ocean Physics Engine'}
+            {status === 'loading'
+              ? 'Loading…'
+              : status === 'live'
+                ? result?.source_mode === 'live' ? 'Neural Model · Live Inputs (exp.)' : 'Neural Model · Archive'
+                : 'Ocean Physics Engine'}
           </span>
           <div className="flex items-center gap-1.5 bg-accent/10 border border-accent/30 px-3 py-1 rounded-lg text-[10px] font-mono text-accent">
             <Cpu className="w-3 h-3" />
-            <span>INFERENCE: {result?.inference_latency_ms ? `${result.inference_latency_ms} ms` : '11.4 ms'} | RMSE: 0.214°C</span>
+            <span>
+              {result?.date ? `${result.date} | ` : ''}{result ? `${result.inference_latency_ms} ms | ` : ''}TEST RMSE: {testRmse !== undefined && testRmse !== null ? `${testRmse.toFixed(3)}°C` : '—'}
+            </span>
           </div>
         </div>
       </div>
+
+      {result?.warning && (
+        <div className="px-5 py-1.5 bg-amber-500/10 border-b border-amber-500/25 text-[10px] font-mono text-amber-300 shrink-0">
+          ⚠ {result.warning}
+        </div>
+      )}
 
       {/* Main Workspace */}
       <div className="flex-1 overflow-y-auto">
@@ -241,7 +196,8 @@ export const Reconstruction: React.FC<ReconstructionProps> = ({ coordinates, onB
 
                 <div className="grid grid-cols-8 gap-1.5 py-2">
                   {Array.from({ length: 32 }).map((_, i) => {
-                    const embVal = result?.embedding?.[i];
+                    const emb = result?.embedding;
+                    const embVal = emb?.length ? emb[((activeEmbeddingLayer - 1) * 32 + i) % emb.length] : undefined;
                     const weight = embVal !== undefined
                       ? (Math.min(1, Math.max(0, (embVal + 2) / 4))).toFixed(2)
                       : (Math.sin(i * 0.4 + activeEmbeddingLayer) * 0.5 + 0.5).toFixed(2);
@@ -263,15 +219,15 @@ export const Reconstruction: React.FC<ReconstructionProps> = ({ coordinates, onB
               <div className="p-3 rounded-lg bg-navy-deep/60 border border-navy-border/60 text-[11px] font-mono text-text-muted space-y-1">
                 <div className="flex justify-between">
                   <span>ARCHITECTURE:</span>
-                  <span className="text-accent font-semibold">ConvNeXt-ResNet + MLP</span>
+                  <span className="text-accent font-semibold">Residual U-Net + MLP</span>
                 </div>
                 <div className="flex justify-between">
                   <span>PARAMETERS:</span>
-                  <span className="text-text-heading font-semibold">522,863 Weights</span>
+                  <span className="text-text-heading font-semibold">{params ? `${params.toLocaleString()} Weights` : '—'}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span>VAL RMSE (80 EPOCHS):</span>
-                  <span className="text-emerald-400 font-semibold font-mono">0.2144 °C</span>
+                  <span>TEST RMSE (HELD-OUT DAYS):</span>
+                  <span className="text-emerald-400 font-semibold font-mono">{testRmse !== undefined && testRmse !== null ? `${testRmse.toFixed(4)} °C` : '—'}</span>
                 </div>
               </div>
             </div>
