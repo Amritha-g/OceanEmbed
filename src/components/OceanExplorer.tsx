@@ -61,12 +61,16 @@ const MAP_THEMES = {
   },
 };
 
-// Preset sections across the model domain (Bay of Bengal)
-const TRANSECT_PRESETS: Array<{ label: string; points: LatLng[] }> = [
-  { label: 'Chennai → Port Blair', points: [{ lat: 13.08, lng: 80.29 }, { lat: 11.62, lng: 92.73 }] },
-  { label: '88°E meridional', points: [{ lat: 8.0, lng: 88.0 }, { lat: 21.5, lng: 88.0 }] },
-  { label: 'Along 15°N', points: [{ lat: 15.0, lng: 80.5 }, { lat: 15.0, lng: 97.5 }] },
-];
+// Preset sections per region. The model grid covers the Bay of Bengal only (8–22°N, 80–100°E),
+// so an Arabian Sea section would be all land/outside-domain and none are offered there.
+const TRANSECT_PRESETS: Record<ActiveRegion, Array<{ label: string; points: LatLng[] }>> = {
+  bob: [
+    { label: 'Chennai → Port Blair', points: [{ lat: 13.08, lng: 80.29 }, { lat: 11.62, lng: 92.73 }] },
+    { label: '88°E meridional', points: [{ lat: 8.0, lng: 88.0 }, { lat: 21.5, lng: 88.0 }] },
+    { label: 'Along 15°N', points: [{ lat: 15.0, lng: 80.5 }, { lat: 15.0, lng: 97.5 }] },
+  ],
+  as: [],
+};
 
 export const OceanExplorer: React.FC<OceanExplorerProps> = ({
   onExploreProfile,
@@ -215,6 +219,7 @@ export const OceanExplorer: React.FC<OceanExplorerProps> = ({
   const handleRegionChange = (r: ActiveRegion) => {
     setSelectedRegion(r);
     onRegionChange?.(r);
+    clearTransect();
     const target = REGION_CONFIGS[r];
 
     if (mapInstanceRef.current) {
@@ -785,17 +790,23 @@ export const OceanExplorer: React.FC<OceanExplorerProps> = ({
                     )}
                   </div>
                 )}
-                <select
-                  value=""
-                  onChange={(e) => {
-                    const preset = TRANSECT_PRESETS[Number(e.target.value)];
-                    if (preset) applyPreset(preset.points);
-                  }}
-                  className="w-full bg-[#050e1f] border border-slate-700 rounded px-1.5 py-0.5 text-[10px] text-slate-200"
-                >
-                  <option value="">Preset sections…</option>
-                  {TRANSECT_PRESETS.map((p, i) => <option key={p.label} value={i}>{p.label}</option>)}
-                </select>
+                {TRANSECT_PRESETS[selectedRegion].length > 0 ? (
+                  <select
+                    value=""
+                    onChange={(e) => {
+                      const preset = TRANSECT_PRESETS[selectedRegion][Number(e.target.value)];
+                      if (preset) applyPreset(preset.points);
+                    }}
+                    className="w-full bg-[#050e1f] border border-slate-700 rounded px-1.5 py-0.5 text-[10px] text-slate-200"
+                  >
+                    <option value="">Preset sections…</option>
+                    {TRANSECT_PRESETS[selectedRegion].map((p, i) => <option key={p.label} value={i}>{p.label}</option>)}
+                  </select>
+                ) : (
+                  <div className="text-[9px] text-amber-300/90 leading-snug">
+                    The model grid covers the Bay of Bengal only (8–22°N, 80–100°E); sections here will be empty.
+                  </div>
+                )}
                 {transectStatus === 'error' && (
                   <div className="text-[9px] text-rose-300">Section request failed (is the API running?)</div>
                 )}
