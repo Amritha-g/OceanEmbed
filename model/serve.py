@@ -13,6 +13,8 @@ FastAPI server exposing the trained OceanEmbedNet model.
   GET  /api/v1/products        ?date=&var=tchp|d26|mld|sld|sigma100   (daily grid map)
   GET  /api/v1/argo            real ARGO float matchups (model vs float vs GLORYS)
   GET  /api/v1/bulletin        ?date=   printable daily bulletin (HTML)
+  GET  /api/v1/bulletin/point  ?lat=&lon=&date=&format=pdf|png   one-page bulletin for a location
+  POST /api/v1/transect        { points: [{lat, lng}, ...], n?, date?, format? }   depth-vs-distance section
   POST /api/v1/reconstruct     { lat, lng, date?, surface?, region? }
   POST /predict
   POST /predict/point
@@ -48,7 +50,7 @@ import torch
 from fastapi import APIRouter, FastAPI, HTTPException, Query
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel, Field
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -57,7 +59,7 @@ sys.path.insert(0, str(ROOT))
 from model.climatology import day_of_year, surface_from_point  # noqa: E402
 from model.data import OceanData, load, nearest_ocean  # noqa: E402
 from model.ensemble import Ensemble  # noqa: E402
-from model import bulletin, products  # noqa: E402
+from model import bulletin, products, transect  # noqa: E402
 from model.live_feed import fetch_live  # noqa: E402
 from model.ocean_embed import STD_DEPTHS  # noqa: E402
 
@@ -205,6 +207,26 @@ class ReconstructRequest(BaseModel):
     v_wind: Optional[float] = None
     surface: Optional[SurfaceFields] = None
     source: str = Field("archive", pattern="^(archive|live)$")
+
+
+class LatLng(BaseModel):
+    lat: float = Field(..., ge=-90, le=90)
+    lng: float = Field(..., ge=-180, le=180)
+
+
+class TransectRequest(BaseModel):
+    points: List[LatLng] = Field(..., min_length=2, max_length=50)
+    n: int = Field(150, ge=2, le=500)
+    date: Optional[str] = None
+    format: str = Field("json", pattern="^(json|png|pdf)$")
+
+
+MEDIA = {"pdf": "application/pdf", "png": "image/png"}
+
+
+def _file(content: bytes, fmt: str, name: str) -> Response:
+    return Response(content, media_type=MEDIA[fmt],
+                    headers={"Content-Disposition": f'attachment; filename="{name}.{fmt}"'})
 
 
 def _require_model() -> Ensemble:
@@ -515,6 +537,107 @@ def daily_bulletin(date: Optional[str] = None):
     _require_model()
     t, _ = _day_index(date)
     return bulletin.render(grid["dates"][t], _day_products(t), data.lat, data.lon, _test_metrics())
+
+
+@v1.get("/bulletin/point")
+def point_bulletin(
+    lat: float = Query(..., ge=-90, le=90),
+    lon: Optional[float] = Query(None, ge=-180, le=180),
+    lng: Optional[float] = Query(None, ge=-180, le=180),
+    date: Optional[str] = None,
+    region: Optional[str] = None,
+    format: str = Query("pdf", pattern="^(pdf|png)$"),
+):
+    lon = lon if lon is not None else lng
+    if lon is None:
+        raise HTTPException(400, "lon or lng is required")
+    p = _profile_payload(lat, lon, date, region, {})
+    t, _ = _day_index(date)
+    content = bulletin.render_point(p, format, _test_metrics(), _day_products(t)["tchp"], data.lat, data.lon)
+    s = p["surface"]
+    return _file(content, format, f"oceanembed_bulletin_{s['lat']:.2f}N_{s['lng']:.2f}E_{p['date']}")
+
+
+def _nan_list(a: np.ndarray, nd: int = 3) -> list:
+    return [None if not np.isfinite(v) else round(float(v), nd) for v in a]
+
+
+def _transect_payload(req: TransectRequest) -> dict:
+    _require_model()
+    t0 = time.perf_counter()
+    t, exact = _day_index(req.date)
+    y, sigma, _ = _day_inference(t)
+    Y, S = y.cpu().numpy(), sigma.cpu().numpy()
+    prods = _day_products(t)
+
+    wlat = [p.lat for p in req.points]
+    wlon = [p.lng for p in req.points]
+    lat_s, lon_s, dist, cum = transect.sample_path(wlat, wlon, req.n)
+    res = float(data.lat[1] - data.lat[0])
+    i = np.abs(data.lat[:, None] - lat_s[None]).argmin(0)
+    j = np.abs(data.lon[:, None] - lon_s[None]).argmin(0)
+    inside = ((lat_s >= data.lat[0] - res / 2) & (lat_s <= data.lat[-1] + res / 2)
+              & (lon_s >= data.lon[0] - res / 2) & (lon_s <= data.lon[-1] + res / 2))
+    ocean = inside & (data.static[0][i, j] > 0.5)
+    valid = data.y_valid[:, i, j] & ocean[None]                        # (D, N)
+    model_s = np.where(valid, Y[:, i, j], np.nan)
+    truth_s = np.where(valid, data.Y[t][:, i, j], np.nan)
+    sigma_s = np.where(valid, S[:, i, j], np.nan)
+    depths = np.asarray(STD_DEPTHS, float)
+    seafloor = np.where(valid.any(0), depths[np.where(valid, np.arange(len(depths))[:, None], 0).max(0)], np.nan)
+
+    def along(name):
+        return np.where(ocean, prods[name][i, j], np.nan)
+
+    mld_s, d26_s, tchp_s = along("mld"), along("d26"), along("tchp")
+    err = model_s - truth_s
+
+    def stat(a, fn, nd=1):
+        f = a[np.isfinite(a)]
+        return round(float(fn(f)), nd) if f.size else None
+
+    return {
+        "date": grid["dates"][t],
+        "date_exact": exact,
+        "depths_m": STD_DEPTHS,
+        "waypoints": [{"lat": a, "lng": b} for a, b in zip(wlat, wlon)],
+        "waypoint_distance_km": [round(float(v), 2) for v in cum],
+        "distance_km": [round(float(v), 2) for v in dist],
+        "lat": [round(float(v), 4) for v in lat_s],
+        "lon": [round(float(v), 4) for v in lon_s],
+        "cell_lat": [float(data.lat[k]) for k in i],
+        "cell_lon": [float(data.lon[k]) for k in j],
+        "in_domain": inside.tolist(),
+        "ocean": ocean.tolist(),
+        "seafloor_depth_m": _nan_list(seafloor, 0),
+        "model": [_nan_list(r) for r in model_s],
+        "truth": [_nan_list(r) for r in truth_s],
+        "sigma": [_nan_list(r) for r in sigma_s],
+        "mld_m": _nan_list(mld_s, 1),
+        "d26_m": _nan_list(d26_s, 1),
+        "tchp_kj_cm2": _nan_list(tchp_s, 1),
+        "summary": {
+            "length_km": round(float(cum[-1]), 1),
+            "n_ocean": int(ocean.sum()),
+            "sst_min": stat(model_s[0], np.min), "sst_max": stat(model_s[0], np.max),
+            "mld_mean": stat(mld_s, np.mean, 0), "d26_mean": stat(d26_s, np.mean, 0),
+            "tchp_max": stat(tchp_s, np.max, 0),
+            "rmse_vs_glorys": stat(err, lambda e: np.sqrt(np.mean(e ** 2)), 3),
+            "sigma_mean": stat(sigma_s, np.mean, 2),
+        },
+        "inference_latency_ms": round((time.perf_counter() - t0) * 1000, 2),
+    }
+
+
+@v1.post("/transect")
+def transect_section(req: TransectRequest):
+    p = _transect_payload(req)
+    if req.format == "json":
+        return p
+    content = transect.render(p, req.format, data.static[0] > 0.5, data.lat, data.lon)
+    a, b = p["waypoints"][0], p["waypoints"][-1]
+    return _file(content, req.format,
+                 f"oceanembed_transect_{a['lat']:.1f}N{a['lng']:.1f}E_{b['lat']:.1f}N{b['lng']:.1f}E_{p['date']}")
 
 
 @v1.get("/argo")

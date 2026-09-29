@@ -224,3 +224,76 @@ export async function fetchArgo(): Promise<{ summary: ArgoSummary | null; profil
   if (!res.ok) throw new Error(`ARGO request failed (${res.status})`);
   return res.json();
 }
+
+/** One-page PDF/PNG bulletin for a location and day. */
+export function pointBulletinUrl(lat: number, lng: number, format: 'pdf' | 'png', date = DEFAULT_DATE): string {
+  return `${API_BASE}/bulletin/point?${new URLSearchParams({ lat: String(lat), lon: String(lng), date, format })}`;
+}
+
+export interface LatLng {
+  lat: number;
+  lng: number;
+}
+
+type Cell = number | null;
+
+export interface TransectResponse {
+  date: string;
+  date_exact: boolean;
+  depths_m: number[];
+  waypoints: LatLng[];
+  waypoint_distance_km: number[];
+  /** Per sample along the line */
+  distance_km: number[];
+  lat: number[];
+  lon: number[];
+  in_domain: boolean[];
+  ocean: boolean[];
+  seafloor_depth_m: Cell[];
+  mld_m: Cell[];
+  d26_m: Cell[];
+  tchp_kj_cm2: Cell[];
+  /** (depth, sample); null on land or below the seafloor */
+  model: Cell[][];
+  truth: Cell[][];
+  sigma: Cell[][];
+  summary: {
+    length_km: number;
+    n_ocean: number;
+    sst_min: number | null;
+    sst_max: number | null;
+    mld_mean: number | null;
+    d26_mean: number | null;
+    tchp_max: number | null;
+    rmse_vs_glorys: number | null;
+    sigma_mean: number | null;
+  };
+  inference_latency_ms: number;
+}
+
+function transectBody(points: LatLng[], n: number, date: string, format: string) {
+  return JSON.stringify({ points: points.map(({ lat, lng }) => ({ lat, lng })), n, date, format });
+}
+
+export async function fetchTransect(points: LatLng[], n = 150, date = DEFAULT_DATE): Promise<TransectResponse> {
+  const res = await fetch(`${API_BASE}/transect`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: transectBody(points, n, date, 'json'),
+  });
+  if (!res.ok) throw new Error(`Transect request failed (${res.status}): ${await res.text()}`);
+  return res.json();
+}
+
+/** Server-rendered publication figure of the section (PNG or PDF). */
+export async function fetchTransectFigure(
+  points: LatLng[], format: 'png' | 'pdf', n = 150, date = DEFAULT_DATE,
+): Promise<Blob> {
+  const res = await fetch(`${API_BASE}/transect`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: transectBody(points, n, date, format),
+  });
+  if (!res.ok) throw new Error(`Transect figure failed (${res.status})`);
+  return res.blob();
+}
