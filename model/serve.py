@@ -9,7 +9,7 @@ FastAPI server exposing the trained OceanEmbedNet model.
   GET  /api/v1/depths
   GET  /api/v1/dataset
   GET  /api/v1/metrics
-  GET  /api/v1/profile         ?lat=&lon=&date=
+  GET  /api/v1/profile         ?lat=&lon=&date=&source=archive|live
   POST /api/v1/reconstruct     { lat, lng, date?, surface?, region? }
   POST /predict
   POST /predict/point
@@ -19,6 +19,10 @@ from that day's real satellite inputs with the full grid as spatial context; the
 profile at the same pixel is returned as ground truth. Points outside the domain fall back
 to a uniform patch built from the supplied (or climatological) surface values.
 
+source=live (experimental) replaces SST, currents and winds with current Open-Meteo readings
+(model/live_feed.py). Salinity and sea level have no live source and stay at the latest dataset
+day. Every response carries per-field lineage so clients can label each value's origin.
+
 Usage:
     python model/serve.py
     uvicorn api.main:app --host 0.0.0.0 --port 8000
@@ -27,7 +31,10 @@ Usage:
 from __future__ import annotations
 
 import json
+import logging
 import sys
+import time
+from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 from functools import lru_cache
 from pathlib import Path
@@ -36,6 +43,7 @@ from typing import List, Optional
 import numpy as np
 import torch
 from fastapi import APIRouter, FastAPI, HTTPException, Query
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -44,6 +52,7 @@ sys.path.insert(0, str(ROOT))
 
 from model.climatology import day_of_year, surface_from_point  # noqa: E402
 from model.data import OceanData, load  # noqa: E402
+from model.live_feed import fetch_live  # noqa: E402
 from model.ocean_embed import STD_DEPTHS, OceanEmbedNet  # noqa: E402
 
 MODEL_PATH = ROOT / "model" / "best_model.pt"
@@ -52,6 +61,17 @@ METRICS_PATH = ROOT / "model" / "metrics.json"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 FEATURES = ["sst", "sss", "sla", "u_cur", "v_cur", "u_wind", "v_wind"]
 PATCH = 16  # side of the uniform patch used for out-of-domain points
+ARCHIVE_SOURCES = {
+    "sst": "OSTIA L4 (Copernicus)",
+    "sss": "GLORYS12 (Copernicus)",
+    "sla": "DUACS L4 (Copernicus)",
+    "u_cur": "GLORYS12 (Copernicus)",
+    "v_cur": "GLORYS12 (Copernicus)",
+    "u_wind": "CCMP V3.1 (NASA)",
+    "v_wind": "CCMP V3.1 (NASA)",
+}
+CLIMATOLOGY = "Synthetic climatology"
+logger = logging.getLogger("OceanEmbed.Serve")
 
 model: Optional[OceanEmbedNet] = None
 data: Optional[OceanData] = None
@@ -190,6 +210,7 @@ class ReconstructRequest(BaseModel):
     u_wind: Optional[float] = None
     v_wind: Optional[float] = None
     surface: Optional[SurfaceFields] = None
+    source: str = Field("archive", pattern="^(archive|live)$")
 
 
 def _require_model() -> OceanEmbedNet:
@@ -270,11 +291,27 @@ def _surface_at(t: int, i: int, j: int) -> dict:
     return {f: round(float(data.X[t, k, i, j]), 4) for k, f in enumerate(FEATURES)}
 
 
-def _profile_payload(lat, lon, date, region, overrides: dict) -> dict:
+def _lineage(source: str, date: Optional[str], live: bool = False) -> dict:
+    return {"source": source, "date": date, "live": live}
+
+
+def _client_lineage(overrides: dict) -> dict:
+    return {f: _lineage("Client-supplied", None) for f in overrides}
+
+
+def _finish(payload: dict, t0: float) -> dict:
+    payload["surface_synthesized"] = any(v["source"] == CLIMATOLOGY for v in payload["lineage"].values())
+    payload["inference_latency_ms"] = round((time.perf_counter() - t0) * 1000, 2)
+    return payload
+
+
+def _profile_payload(lat, lon, date, region, overrides: dict, override_lineage: Optional[dict] = None) -> dict:
     _require_model()
+    t0 = time.perf_counter()
+    override_lineage = override_lineage or _client_lineage(overrides)
     cell = _nearest_ocean(lat, lon)
     if cell is None:
-        return _out_of_domain_payload(lat, lon, date, region, overrides)
+        return _out_of_domain_payload(lat, lon, date, region, overrides, override_lineage, t0)
 
     t, exact = _day_index(date)
     i, j = cell
@@ -296,8 +333,10 @@ def _profile_payload(lat, lon, date, region, overrides: dict) -> dict:
     snap_km = float(np.hypot(glat - lat, (glon - lon) * np.cos(np.radians(lat))) * 111.2)
     surface = {**_surface_at(t, i, j), **overrides}
     seafloor = max((z for z, ok in zip(STD_DEPTHS, valid) if ok), default=0)
+    day = grid["dates"][t]
+    lineage = {f: override_lineage.get(f) or _lineage(ARCHIVE_SOURCES[f], day) for f in FEATURES}
 
-    return {
+    return _finish({
         "depths_m": STD_DEPTHS,
         "temperatures": [round(v, 3) for v in temps],
         "truth": truth,
@@ -312,13 +351,14 @@ def _profile_payload(lat, lon, date, region, overrides: dict) -> dict:
         "region": region,
         "source": "neural",
         "in_domain": True,
-        "surface_synthesized": False,
+        "source_mode": "archive",
+        "lineage": lineage,
         "grid_point": {"lat": glat, "lng": glon, "snap_km": round(snap_km, 1)},
         "model": _model_card(),
-    }
+    }, t0)
 
 
-def _out_of_domain_payload(lat, lon, date, region, overrides: dict) -> dict:
+def _out_of_domain_payload(lat, lon, date, region, overrides: dict, override_lineage: dict, t0: float) -> dict:
     clim = surface_from_point(lat, lon, region)
     fields = {f: overrides.get(f, clim[f]) for f in FEATURES}
     doy = day_of_year(date)
@@ -331,7 +371,8 @@ def _out_of_domain_payload(lat, lon, date, region, overrides: dict) -> dict:
     c = PATCH // 2
     temps = y[:, c, c].cpu().tolist()
     vec = emb[:, c, c].cpu().tolist()
-    return {
+    lineage = {f: override_lineage.get(f) or _lineage(CLIMATOLOGY, None) for f in FEATURES}
+    return _finish({
         "depths_m": STD_DEPTHS,
         "temperatures": [round(v, 3) for v in temps],
         "truth": None,
@@ -346,10 +387,11 @@ def _out_of_domain_payload(lat, lon, date, region, overrides: dict) -> dict:
         "region": region,
         "source": "neural",
         "in_domain": False,
-        "surface_synthesized": len(overrides) < len(FEATURES),
+        "source_mode": "archive",
+        "lineage": lineage,
         "grid_point": None,
         "model": _model_card(),
-    }
+    }, t0)
 
 
 def _health_payload() -> dict:
@@ -411,28 +453,56 @@ def metrics():
     return payload
 
 
+async def _live_payload(lat, lon, region, overrides: dict) -> dict:
+    """Reconstruct from current Open-Meteo readings; SSS/SLA fall back to the latest dataset day."""
+    live = await fetch_live(lat, lon)
+    observed = live["observed_at"] or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M")
+    lineage = {f: _lineage("Open-Meteo", observed, live=True) for f in live["values"]}
+    lineage.update(_client_lineage(overrides))
+    # Blocking torch inference runs off the event loop
+    payload = await run_in_threadpool(
+        _profile_payload, lat, lon, grid["dates"][-1], region, {**live["values"], **overrides}, lineage)
+    payload.update({
+        "source_mode": "live",
+        "date": observed[:10],
+        "date_exact": False,
+        # GLORYS truth belongs to the archive day, not to today
+        "truth": None,
+        "live_fields": sorted(live["values"]),
+        "warning": ("Experimental: Open-Meteo inputs differ from the training sources and the model has only "
+                    "seen Feb-Mar 2024. Salinity and sea level are from the latest archive day."),
+    })
+    return payload
+
+
 @v1.get("/profile")
-def profile(
+async def profile(
     lat: float = Query(..., ge=-90, le=90),
     lon: Optional[float] = Query(None, ge=-180, le=180),
     lng: Optional[float] = Query(None, ge=-180, le=180),
     date: Optional[str] = None,
     region: Optional[str] = None,
+    source: str = Query("archive", pattern="^(archive|live)$"),
 ):
     lon = lon if lon is not None else lng
     if lon is None:
         raise HTTPException(400, "lon or lng is required")
-    return _profile_payload(lat, lon, date, region, {})
+    if source == "live":
+        return await _live_payload(lat, lon, region, {})
+    return await run_in_threadpool(_profile_payload, lat, lon, date, region, {})
 
 
 @v1.post("/reconstruct")
-def reconstruct(req: ReconstructRequest):
+async def reconstruct(req: ReconstructRequest):
     lon = req.lng if req.lng is not None else req.lon
     if lon is None:
         raise HTTPException(400, "lng or lon is required")
     src = req.surface.model_dump(exclude_none=True) if req.surface else {}
     top = {f: getattr(req, f) for f in FEATURES if getattr(req, f) is not None}
-    return _profile_payload(req.lat, lon, req.date, req.region, {**src, **top})
+    overrides = {**src, **top}
+    if req.source == "live":
+        return await _live_payload(req.lat, lon, req.region, overrides)
+    return await run_in_threadpool(_profile_payload, req.lat, lon, req.date, req.region, overrides)
 
 
 @app.post("/predict/point", response_model=PointPredictionResponse)
@@ -440,7 +510,7 @@ def predict_point(req: PointPredictionRequest):
     out = []
     for i in req.inputs:
         fields = {f: getattr(i, f) for f in FEATURES}
-        out.append(_out_of_domain_payload(i.lat, i.lon, None, None, fields)["temperatures"])
+        out.append(_profile_payload(i.lat, i.lon, None, None, fields)["temperatures"])
     return PointPredictionResponse(depths_m=STD_DEPTHS, temperatures=out, lat=[i.lat for i in req.inputs])
 
 
