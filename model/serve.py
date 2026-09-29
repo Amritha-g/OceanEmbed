@@ -10,6 +10,9 @@ FastAPI server exposing the trained OceanEmbedNet model.
   GET  /api/v1/dataset
   GET  /api/v1/metrics
   GET  /api/v1/profile         ?lat=&lon=&date=&source=archive|live
+  GET  /api/v1/products        ?date=&var=tchp|d26|mld|sld|sigma100   (daily grid map)
+  GET  /api/v1/argo            real ARGO float matchups (model vs float vs GLORYS)
+  GET  /api/v1/bulletin        ?date=   printable daily bulletin (HTML)
   POST /api/v1/reconstruct     { lat, lng, date?, surface?, region? }
   POST /predict
   POST /predict/point
@@ -45,19 +48,22 @@ import torch
 from fastapi import APIRouter, FastAPI, HTTPException, Query
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from model.climatology import day_of_year, surface_from_point  # noqa: E402
-from model.data import OceanData, load  # noqa: E402
+from model.data import OceanData, load, nearest_ocean  # noqa: E402
+from model.ensemble import Ensemble  # noqa: E402
+from model import bulletin, products  # noqa: E402
 from model.live_feed import fetch_live  # noqa: E402
-from model.ocean_embed import STD_DEPTHS, OceanEmbedNet  # noqa: E402
+from model.ocean_embed import STD_DEPTHS  # noqa: E402
 
-MODEL_PATH = ROOT / "model" / "best_model.pt"
 LOG_PATH = ROOT / "model" / "train_log.json"
 METRICS_PATH = ROOT / "model" / "metrics.json"
+MATCHUPS_PATH = ROOT / "model" / "argo_matchups.json"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 FEATURES = ["sst", "sss", "sla", "u_cur", "v_cur", "u_wind", "v_wind"]
 PATCH = 16  # side of the uniform patch used for out-of-domain points
@@ -73,7 +79,7 @@ ARCHIVE_SOURCES = {
 CLIMATOLOGY = "Synthetic climatology"
 logger = logging.getLogger("OceanEmbed.Serve")
 
-model: Optional[OceanEmbedNet] = None
+model: Optional[Ensemble] = None
 data: Optional[OceanData] = None
 grid: dict = {}
 ckpt_meta = {
@@ -86,28 +92,16 @@ ckpt_meta = {
 
 def load_model() -> None:
     global model, data
-    kwargs = {}
-    ckpt = None
-    if MODEL_PATH.exists():
-        ckpt = torch.load(MODEL_PATH, map_location=DEVICE)
-        kwargs = ckpt.get("model_kwargs", {})
-    net = OceanEmbedNet(**kwargs).to(DEVICE)
-    if ckpt is not None:
-        net.load_state_dict(ckpt["model_state"])
-        ckpt_meta.update({
-            "loaded": True,
-            "epoch": ckpt.get("epoch"),
-            "val_rmse": ckpt.get("val_rmse"),
-            "val_mae": ckpt.get("val_mae"),
-        })
-        print(
-            f"[Serve] Loaded {MODEL_PATH} "
-            f"(epoch={ckpt_meta['epoch']}, val RMSE={ckpt_meta['val_rmse']:.4f}°C)"
-        )
-    else:
-        print(f"[Serve] WARNING: No checkpoint at {MODEL_PATH}, using untrained weights.")
-    net.eval()
-    model = net
+    model = Ensemble(DEVICE)
+    ckpt = model.checkpoints[0]
+    ckpt_meta.update({
+        "loaded": True,
+        "epoch": ckpt.get("epoch"),
+        "val_rmse": ckpt.get("val_rmse"),
+        "val_mae": ckpt.get("val_mae"),
+    })
+    print(f"[Serve] Loaded {len(model)} model(s): {[p.name for p in model.paths]}"
+          f"{'' if model.scale is not None else ' (uncalibrated: run model/eval.py)'}")
 
     data = load()
     H, W = len(data.lat), len(data.lon)
@@ -213,7 +207,7 @@ class ReconstructRequest(BaseModel):
     source: str = Field("archive", pattern="^(archive|live)$")
 
 
-def _require_model() -> OceanEmbedNet:
+def _require_model() -> Ensemble:
     if model is None or data is None:
         raise HTTPException(500, "Model not loaded")
     return model
@@ -231,11 +225,13 @@ def _model_card() -> dict:
     return {
         "name": "OceanEmbedNet",
         "architecture": "Residual U-Net satellite encoder + 1x1 MLP depth decoder",
+        "ensemble_members": len(_require_model()),
+        "uncertainty": "calibrated ensemble spread" if _require_model().scale is not None else "uncalibrated",
         "parameters": n,
         "in_channels": FEATURES,
         "pos_encoding": ["sin/cos(2π·doy/365)", "lat", "lon", "ocean mask", "seafloor depth"],
         "depths_m": STD_DEPTHS,
-        "checkpoint": str(MODEL_PATH.name) if ckpt_meta["loaded"] else None,
+        "checkpoint": ", ".join(p.name for p in _require_model().paths),
         "epoch": ckpt_meta["epoch"],
         "val_rmse_c": ckpt_meta["val_rmse"],
         "val_mae_c": ckpt_meta["val_mae"],
@@ -244,11 +240,6 @@ def _model_card() -> dict:
         "trained": ckpt_meta["loaded"],
         "device": DEVICE,
     }
-
-
-def _uncertainty() -> Optional[List[float]]:
-    m = _test_metrics()
-    return [d["rmse"] for d in m["per_depth"]] if m else None
 
 
 def _day_index(date: Optional[str]) -> tuple[int, bool]:
@@ -261,23 +252,10 @@ def _day_index(date: Optional[str]) -> tuple[int, bool]:
     return idx, False
 
 
-def _nearest_ocean(lat: float, lon: float) -> Optional[tuple[int, int]]:
-    """Nearest ocean pixel (i, j) for a point inside the grid bounds, else None."""
-    step = float(data.lat[1] - data.lat[0])
-    if not (data.lat[0] - step / 2 <= lat <= data.lat[-1] + step / 2
-            and data.lon[0] - step / 2 <= lon <= data.lon[-1] + step / 2):
-        return None
-    ocean = data.static[0] > 0.5
-    ii, jj = np.nonzero(ocean)
-    d2 = (data.lat[ii] - lat) ** 2 + ((data.lon[jj] - lon) * np.cos(np.radians(lat))) ** 2
-    k = int(np.argmin(d2))
-    return int(ii[k]), int(jj[k])
-
-
 def _run(x, lat, lon, doy, static, present):
-    with torch.no_grad():
-        y, emb = _require_model()(x, lat, lon, doy, static, present, return_embedding=True)
-    return y[0], emb[0]
+    """Ensemble mean (°C), calibrated σ (°C) and embedding for the first sample, each (C, H, W)."""
+    y, sigma, emb = _require_model().predict(x, lat, lon, doy, static, present)
+    return y[0], sigma[0], emb[0]
 
 
 @lru_cache(maxsize=8)
@@ -285,6 +263,34 @@ def _day_inference(t: int):
     x = torch.from_numpy(data.X[t:t + 1]).to(DEVICE)
     doy = torch.tensor([data.doy[t]], device=DEVICE)
     return _run(x, grid["lat"], grid["lon"], doy, grid["static"], grid["present"])
+
+
+PRODUCT_INFO = {
+    "tchp": ("Tropical cyclone heat potential", "kJ/cm²"),
+    "d26": ("Depth of the 26 °C isotherm", "m"),
+    "mld": ("Mixed-layer depth", "m"),
+    "sld": ("Sonic layer depth", "m"),
+    "sigma100": ("Model uncertainty (±1σ) at 100 m", "°C"),
+}
+
+
+@lru_cache(maxsize=8)
+def _day_products(t: int) -> dict:
+    """All derived product grids for dataset day t, NaN on land."""
+    y, sigma, _ = _day_inference(t)
+    T = y.cpu().numpy().astype(np.float64)
+    T[~data.y_valid] = np.nan
+    ocean = data.static[0] > 0.5
+    h = products.mld(T)
+    c = products.sound_speed(T, products.salinity_profile(data.X[t, 1], h))
+    out = {
+        "tchp": products.tchp(T),
+        "d26": products.d26(T),
+        "mld": h,
+        "sld": products.sld(c).astype(np.float64),
+        "sigma100": sigma[STD_DEPTHS.index(100)].cpu().numpy().astype(np.float64),
+    }
+    return {k: np.where(ocean, v, np.nan) for k, v in out.items()}
 
 
 def _surface_at(t: int, i: int, j: int) -> dict:
@@ -309,7 +315,7 @@ def _profile_payload(lat, lon, date, region, overrides: dict, override_lineage: 
     _require_model()
     t0 = time.perf_counter()
     override_lineage = override_lineage or _client_lineage(overrides)
-    cell = _nearest_ocean(lat, lon)
+    cell = nearest_ocean(data, lat, lon)
     if cell is None:
         return _out_of_domain_payload(lat, lon, date, region, overrides, override_lineage, t0)
 
@@ -321,13 +327,14 @@ def _profile_payload(lat, lon, date, region, overrides: dict, override_lineage: 
             if f in overrides:
                 x[0, k, i, j] = overrides[f]
         doy = torch.tensor([data.doy[t]], device=DEVICE)
-        y, emb = _run(x, grid["lat"], grid["lon"], doy, grid["static"], grid["present"])
+        y, sigma, emb = _run(x, grid["lat"], grid["lon"], doy, grid["static"], grid["present"])
     else:
-        y, emb = _day_inference(t)
+        y, sigma, emb = _day_inference(t)
 
     valid = data.y_valid[:, i, j]
     truth = [round(float(v), 3) if ok else None for v, ok in zip(data.Y[t, :, i, j], valid)]
     temps = y[:, i, j].cpu().tolist()
+    sig = sigma[:, i, j].cpu().tolist()
     vec = emb[:, i, j].cpu().tolist()
     glat, glon = float(data.lat[i]), float(data.lon[j])
     snap_km = float(np.hypot(glat - lat, (glon - lon) * np.cos(np.radians(lat))) * 111.2)
@@ -342,7 +349,9 @@ def _profile_payload(lat, lon, date, region, overrides: dict, override_lineage: 
         "truth": truth,
         "valid_depths": [bool(v) for v in valid],
         "seafloor_depth_m": int(seafloor),
-        "uncertainty_c": _uncertainty(),
+        "uncertainty_c": [round(v, 3) for v in sig],
+        "products": products.profile_products(
+            STD_DEPTHS, [v if ok else None for v, ok in zip(temps, valid)], surface["sss"]),
         "embedding": [round(v, 5) for v in vec],
         "embedding_dim": len(vec),
         "surface": {**surface, "lat": glat, "lng": glon, "doy": int(data.doy[t])},
@@ -367,9 +376,10 @@ def _out_of_domain_payload(lat, lon, date, region, overrides: dict, override_lin
     lat_t = torch.full((1, PATCH, PATCH), lat, device=DEVICE)
     lon_t = torch.full((1, PATCH, PATCH), lon, device=DEVICE)
     doy_t = torch.tensor([doy], device=DEVICE)
-    y, emb = _run(x, lat_t, lon_t, doy_t, None, None)
+    y, sigma, emb = _run(x, lat_t, lon_t, doy_t, None, None)
     c = PATCH // 2
     temps = y[:, c, c].cpu().tolist()
+    sig = sigma[:, c, c].cpu().tolist()
     vec = emb[:, c, c].cpu().tolist()
     lineage = {f: override_lineage.get(f) or _lineage(CLIMATOLOGY, None) for f in FEATURES}
     return _finish({
@@ -378,7 +388,8 @@ def _out_of_domain_payload(lat, lon, date, region, overrides: dict, override_lin
         "truth": None,
         "valid_depths": [True] * len(STD_DEPTHS),
         "seafloor_depth_m": None,
-        "uncertainty_c": _uncertainty(),
+        "uncertainty_c": [round(v, 3) for v in sig],
+        "products": products.profile_products(STD_DEPTHS, temps, fields["sss"]),
         "embedding": [round(v, 5) for v in vec],
         "embedding_dim": len(vec),
         "surface": {**fields, "lat": lat, "lng": lon, "doy": doy},
@@ -475,6 +486,46 @@ async def _live_payload(lat, lon, region, overrides: dict) -> dict:
     return payload
 
 
+@v1.get("/products")
+def product_grid(
+    date: Optional[str] = None,
+    var: str = Query("tchp", pattern="^(tchp|d26|mld|sld|sigma100)$"),
+):
+    _require_model()
+    t, exact = _day_index(date)
+    grid_v = _day_products(t)[var]
+    finite = grid_v[np.isfinite(grid_v)]
+    name, units = PRODUCT_INFO[var]
+    stats = {"min": None, "max": None, "mean": None}
+    if finite.size:
+        stats = {"min": round(float(finite.min()), 2), "max": round(float(finite.max()), 2),
+                 "mean": round(float(finite.mean()), 2)}
+    return {
+        "var": var, "name": name, "units": units,
+        "date": grid["dates"][t], "date_exact": exact,
+        "lat": [float(v) for v in data.lat], "lon": [float(v) for v in data.lon],
+        "values": [[None if not np.isfinite(v) else round(float(v), 2) for v in row] for row in grid_v],
+        "stats": stats,
+        "thresholds": {"watch": products.TCHP_WATCH, "high": products.TCHP_HIGH} if var == "tchp" else None,
+    }
+
+
+@v1.get("/bulletin", response_class=HTMLResponse)
+def daily_bulletin(date: Optional[str] = None):
+    _require_model()
+    t, _ = _day_index(date)
+    return bulletin.render(grid["dates"][t], _day_products(t), data.lat, data.lon, _test_metrics())
+
+
+@v1.get("/argo")
+def argo_matchups():
+    if not MATCHUPS_PATH.exists():
+        raise HTTPException(404, "No ARGO matchups; run scripts/fetch_argo.py then model/eval.py")
+    matchups = json.loads(MATCHUPS_PATH.read_text())
+    summary = (_test_metrics() or {}).get("argo")
+    return {"summary": summary, "profiles": matchups}
+
+
 @v1.get("/profile")
 async def profile(
     lat: float = Query(..., ge=-90, le=90),
@@ -531,7 +582,7 @@ def predict_grid(req: GridPredictionRequest):
     lat_t = torch.from_numpy(lat_np).unsqueeze(0).to(DEVICE)
     lon_t = torch.from_numpy(lon_np).unsqueeze(0).to(DEVICE)
     doy_t = torch.tensor([req.doy], device=DEVICE)
-    y, _ = _run(x_t, lat_t, lon_t, doy_t, None, None)
+    y, _, _ = _run(x_t, lat_t, lon_t, doy_t, None, None)
     return GridPredictionResponse(depths_m=STD_DEPTHS, temperature=y.cpu().numpy().tolist(), shape=[len(STD_DEPTHS), H, W])
 
 

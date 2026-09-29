@@ -5,6 +5,7 @@ import { useNeuralProfile } from '../hooks/useNeuralProfile';
 import { useModelMetrics } from '../hooks/useModelMetrics';
 import { DataSource, describeLineage, SurfaceField } from '../utils/api';
 import { SourceToggle } from './SourceToggle';
+import { InputImportance } from './InputImportance';
 
 interface ReconstructionProps {
   coordinates: { lat: number; lng: number };
@@ -165,7 +166,7 @@ export const Reconstruction: React.FC<ReconstructionProps> = ({ coordinates, onB
                 <Sparkles className="w-4 h-4 text-violet-400" />
                 <span className="text-xs font-semibold text-text-heading">2. Ocean Latent Embedding</span>
               </div>
-              <span className="text-[10px] font-mono text-violet-400">64-dim Latent Vector</span>
+              <span className="text-[10px] font-mono text-violet-400">{result?.embedding_dim ?? 48}-dim Latent Vector</span>
             </div>
 
             <div className="flex-1 flex flex-col justify-between gap-4">
@@ -274,6 +275,8 @@ export const Reconstruction: React.FC<ReconstructionProps> = ({ coordinates, onB
             </div>
           </div>
         </div>
+
+        <InputImportance importance={metrics?.validation?.importance} />
       </div>
       </div>
     </div>

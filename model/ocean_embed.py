@@ -140,10 +140,17 @@ class OceanEmbedNet(nn.Module):
 
 
 class OceanEmbedLoss(nn.Module):
-    """Masked MSE (°C²) + physics-aware stratification penalty below the mixed layer."""
-    def __init__(self, lambda_strat=0.05):
+    """
+    Masked MSE (°C²) + stratification penalty below the mixed layer + smoothness of the error along depth.
+
+    The smoothness term penalises the second difference of (pred - target) across adjacent valid levels,
+    so the model cannot trade a good fit at one level for a zig-zag at its neighbours. It acts on the
+    error, not the profile, so sharp real thermoclines are not smoothed away.
+    """
+    def __init__(self, lambda_strat=0.05, lambda_smooth=0.0):
         super().__init__()
         self.lam = lambda_strat
+        self.lam_smooth = lambda_smooth
 
     def forward(self, pred, target, valid):
         valid = valid.to(pred.dtype)
@@ -152,7 +159,13 @@ class OceanEmbedLoss(nn.Module):
         dt_dz = pred[:, 5:] - pred[:, 4:-1]
         both = valid[:, 5:] * valid[:, 4:-1]
         inversion = (F.relu(dt_dz) * both).sum() / both.sum().clamp_min(1)
-        return mse + self.lam * inversion, mse, inversion
+        loss = mse + self.lam * inversion
+        if self.lam_smooth > 0:
+            err = pred - target
+            curv = err[:, 2:] - 2 * err[:, 1:-1] + err[:, :-2]
+            trio = valid[:, 2:] * valid[:, 1:-1] * valid[:, :-2]
+            loss = loss + self.lam_smooth * (curv ** 2 * trio).sum() / trio.sum().clamp_min(1)
+        return loss, mse, inversion
 
 
 def build_model(device='cpu', **kw):

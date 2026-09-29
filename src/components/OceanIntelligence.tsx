@@ -6,6 +6,7 @@ import {
   getPhysicalVariables,
 } from '../utils/oceanPhysics';
 import { useModelMetrics } from '../hooks/useModelMetrics';
+import { useNeuralProfile } from '../hooks/useNeuralProfile';
 
 interface OceanIntelligenceProps {
   coordinates: { lat: number; lng: number };
@@ -22,6 +23,11 @@ export const OceanIntelligence: React.FC<OceanIntelligenceProps> = ({
   const regionData = REGION_CONFIGS[region];
   const activeVars = getPhysicalVariables(coordinates.lat, coordinates.lng, region);
   const { metrics, status: metricsStatus } = useModelMetrics();
+  // Heat potential and mixed layer come from the model's reconstructed column when the API is up
+  const { result, status: profileStatus } = useNeuralProfile(coordinates.lat, coordinates.lng, region);
+  const prod = profileStatus === 'live' ? result?.products : undefined;
+  const tchp = prod?.tchp_kj_cm2 ?? null;
+  const mld = prod?.mld_m != null ? Math.round(prod.mld_m) : activeVars.mld;
 
   const isBoB = region === 'bob';
 
@@ -50,18 +56,24 @@ export const OceanIntelligence: React.FC<OceanIntelligenceProps> = ({
       id: '02',
       icon: TrendingUp,
       iconColor: 'text-accent',
-      title: 'Upper Ocean Heat Content (OHC)',
-      value: `${activeVars.ohc}`,
+      title: tchp !== null ? 'Cyclone Heat Potential (TCHP)' : 'Upper Ocean Heat Content (OHC, simulated)',
+      value: `${tchp !== null ? Math.round(tchp) : activeVars.ohc}`,
       unit: 'kJ/cm²',
       valueColor: 'text-accent',
       valueGlow: 'text-glow',
-      badge: activeVars.ohc > 80 ? 'ELEVATED TCHP' : 'NORMAL RANGE',
+      badge: (tchp ?? activeVars.ohc) >= 90 ? 'HIGH TCHP' : (tchp ?? activeVars.ohc) >= 50 ? 'ELEVATED TCHP' : 'NORMAL RANGE',
       badgeClass: 'text-accent border-accent/30 bg-accent/8',
-      meta: [
-        ['INTEGRAL LAYER', '0 – 300 m thermal pool'],
-        ['BASELINE REF', '10-yr Indian Ocean climatology'],
-        ['CYCLONE FUEL', activeVars.ohc > 75 ? 'Sufficient for Cat-2+ genesis' : 'Moderate heat storage'],
-      ],
+      meta: tchp !== null
+        ? [
+            ['INTEGRAL LAYER', `Surface to D26 (${prod?.d26_m ?? '—'} m)`],
+            ['THRESHOLDS', '≥ 50 watch · ≥ 90 high (kJ/cm²)'],
+            ['PROFILE ORIGIN', `OceanEmbed ensemble · ${result?.date}`],
+          ]
+        : [
+            ['INTEGRAL LAYER', '0 – 300 m thermal pool'],
+            ['BASELINE REF', 'Physics simulation (API offline)'],
+            ['CYCLONE FUEL', activeVars.ohc > 75 ? 'Sufficient for Cat-2+ genesis' : 'Moderate heat storage'],
+          ],
     },
     {
       id: '03',
@@ -85,15 +97,15 @@ export const OceanIntelligence: React.FC<OceanIntelligenceProps> = ({
       icon: Waves,
       iconColor: 'text-emerald-400',
       title: 'Mixed Layer Depth (MLD)',
-      value: `${activeVars.mld}`,
+      value: `${mld}`,
       unit: 'm',
       valueColor: 'text-emerald-400',
       valueGlow: '',
-      badge: activeVars.mld < 35 ? 'SHALLOW MIXING' : 'MODERATE DEPTH',
+      badge: mld < 35 ? 'SHALLOW MIXING' : 'MODERATE DEPTH',
       badgeClass: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/8',
       meta: [
-        ['CRITERION', 'Δσθ = 0.03 kg/m³ threshold'],
-        ['PROFILE ORIGIN', 'OceanEmbed Reconstructed column'],
+        ['CRITERION', 'ΔT = 0.5 °C below the surface'],
+        ['PROFILE ORIGIN', prod ? `OceanEmbed ensemble · ${result?.date}` : 'Physics simulation (API offline)'],
         ['WIND STRESS EFFECT', `Wind speed: ${activeVars.wind} m/s`],
       ],
     },
@@ -262,8 +274,30 @@ export const OceanIntelligence: React.FC<OceanIntelligenceProps> = ({
                 <div className="space-y-3">
                   <p className="text-[10px] font-mono text-text-muted uppercase tracking-wider">Validation Metrics · Bay of Bengal</p>
                   {[
-                    { label: 'OVERALL RMSE', value: `${metrics.validation?.overall.rmse?.toFixed(4) ?? metrics.model?.val_rmse_c?.toFixed(4)} °C`, color: 'text-emerald-400' },
-                    { label: 'OVERALL MAE', value: `${metrics.validation?.overall.mae?.toFixed(4) ?? metrics.model?.val_mae_c?.toFixed(4)} °C`, color: 'text-accent' },
+                    ...(metrics.validation?.argo
+                      ? [
+                          {
+                            label: `ARGO RMSE (${metrics.validation.argo.n_profiles_test} HELD-OUT FLOATS)`,
+                            value: `${metrics.validation.argo.overall.model.rmse?.toFixed(3)} °C`,
+                            color: 'text-emerald-400',
+                          },
+                          {
+                            label: 'VS CLIMATOLOGY ON ARGO',
+                            value: `${(100 * (1 - (metrics.validation.argo.overall.model.rmse ?? 0) / (metrics.validation.argo.overall.climatology.rmse ?? 1))).toFixed(0)}% lower error`,
+                            color: 'text-emerald-400',
+                          },
+                        ]
+                      : []),
+                    ...(metrics.validation?.calibration
+                      ? [{
+                          label: '90% INTERVAL COVERAGE',
+                          value: `${Math.round(metrics.validation.calibration.test_glorys.overall * 100)}% GLORYS${metrics.validation.calibration.argo?.test != null ? ` · ${Math.round(metrics.validation.calibration.argo.test * 100)}% ARGO` : ''}`,
+                          color: 'text-violet-400',
+                        }]
+                      : []),
+                    { label: 'ENSEMBLE MEMBERS', value: `${metrics.validation?.ensemble?.n_members ?? 1}`, color: 'text-cyan-400' },
+                    { label: 'TEST RMSE (GLORYS)', value: `${metrics.validation?.overall.rmse?.toFixed(4) ?? metrics.model?.val_rmse_c?.toFixed(4)} °C`, color: 'text-emerald-400' },
+                    { label: 'TEST MAE (GLORYS)', value: `${metrics.validation?.overall.mae?.toFixed(4) ?? metrics.model?.val_mae_c?.toFixed(4)} °C`, color: 'text-accent' },
                     { label: 'PEARSON CORR', value: metrics.validation?.overall.corr?.toFixed(4) ?? '—', color: 'text-violet-400' },
                     { label: 'BIAS', value: `${(metrics.validation?.overall.bias ?? 0) >= 0 ? '+' : ''}${metrics.validation?.overall.bias?.toFixed(4) ?? '—'} °C`, color: 'text-slate-300' },
                     { label: 'TRAINING EPOCHS', value: `${metrics.epochs ?? metrics.model?.epoch ?? '—'}`, color: 'text-cyan-400' },

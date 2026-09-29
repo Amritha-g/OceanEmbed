@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import L from 'leaflet';
 import { useNeuralProfile } from '../hooks/useNeuralProfile';
-import { DataSource, DEFAULT_DATE, describeLineage, SurfaceField } from '../utils/api';
+import { DataSource, DEFAULT_DATE, describeLineage, fetchProductGrid, ProductGrid, ProductVar, SurfaceField } from '../utils/api';
+import { useArgo } from '../hooks/useArgo';
+import { gridToDataUrl, PRODUCT_RANGE, RAMP_CSS } from '../utils/colormap';
 import { SourceToggle } from './SourceToggle';
 import {
   Layers, ChevronRight, Anchor,
@@ -83,9 +85,26 @@ export const OceanExplorer: React.FC<OceanExplorerProps> = ({
   const mapInstanceRef = useRef<L.Map | null>(null);
   const tileLayerRef = useRef<L.TileLayer | null>(null);
   const layerGroupRef = useRef<L.LayerGroup | null>(null);
+  const overlayRef = useRef<L.ImageOverlay | null>(null);
+  const [overlay, setOverlay] = useState<ProductVar | 'none'>('none');
+  const [overlayGrid, setOverlayGrid] = useState<ProductGrid | null>(null);
   const selectedMarkerRef = useRef<L.Marker | null>(null);
 
   const currentRegion = REGION_CONFIGS[selectedRegion];
+
+  // Real ARGO floats (latest profile per float) replace the hard-coded list in the Bay of Bengal
+  const { profiles: argoProfiles, status: argoStatus } = useArgo();
+  const realFloats = React.useMemo(() => {
+    const byFloat = new Map<string, typeof argoProfiles>();
+    argoProfiles.forEach((p) => byFloat.set(p.platform, [...(byFloat.get(p.platform) ?? []), p]));
+    return [...byFloat.entries()].map(([id, ps]) => {
+      const last = ps.reduce((a, b) => (a.time > b.time ? a : b));
+      const deepest = Math.max(...last.depths_m.filter((_, i) => last.argo[i] !== null));
+      return { id, lat: last.lat, lng: last.lon, lastProfile: last.date, depth: deepest, cycles: ps.length };
+    });
+  }, [argoProfiles]);
+  const useRealFloats = argoStatus === 'live' && selectedRegion === 'bob' && realFloats.length > 0;
+  const floats = useRealFloats ? realFloats : currentRegion.argoFloats;
   const physicsVars = getPhysicalVariables(selectedPoint.lat, selectedPoint.lng, selectedRegion);
   const [dataSource, setDataSource] = useState<DataSource>('archive');
   const { result: neural, status: neuralStatus } = useNeuralProfile(
@@ -318,7 +337,7 @@ export const OceanExplorer: React.FC<OceanExplorerProps> = ({
 
     // 4. ARGO In-Situ Floats
     if (showArgo) {
-      currentRegion.argoFloats.forEach((f) => {
+      floats.forEach((f) => {
         const floatIcon = L.divIcon({
           className: 'argo-marker-container',
           html: `
@@ -368,7 +387,39 @@ export const OceanExplorer: React.FC<OceanExplorerProps> = ({
       group.addLayer(targetMarker);
       selectedMarkerRef.current = targetMarker;
     }
-  }, [selectedRegion, showHeatwave, showCyclone, showArgo, showPointCloud, selectedPoint]);
+  }, [selectedRegion, showHeatwave, showCyclone, showArgo, showPointCloud, selectedPoint, floats]);
+
+  // ── Product overlay (TCHP, D26, MLD, SLD, σ) from the model's daily grid ──
+  useEffect(() => {
+    if (overlay === 'none') {
+      setOverlayGrid(null);
+      return;
+    }
+    let cancelled = false;
+    fetchProductGrid(overlay)
+      .then((g) => !cancelled && setOverlayGrid(g))
+      .catch(() => !cancelled && setOverlayGrid(null));
+    return () => {
+      cancelled = true;
+    };
+  }, [overlay]);
+
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+    overlayRef.current?.remove();
+    overlayRef.current = null;
+    if (!overlayGrid) return;
+    const half = Math.abs(overlayGrid.lat[1] - overlayGrid.lat[0]) / 2;
+    const bounds: L.LatLngBoundsExpression = [
+      [overlayGrid.lat[0] - half, overlayGrid.lon[0] - half],
+      [overlayGrid.lat[overlayGrid.lat.length - 1] + half, overlayGrid.lon[overlayGrid.lon.length - 1] + half],
+    ];
+    const [lo, hi] = PRODUCT_RANGE[overlayGrid.var];
+    const img = L.imageOverlay(gridToDataUrl(overlayGrid, lo, hi), bounds, { opacity: 0.85, className: 'pixelated-overlay' });
+    img.addTo(map);
+    overlayRef.current = img;
+  }, [overlayGrid]);
 
   // ── Fly Map To Feature on Tab Click ───────────────────────────────────────
   const flyToCoord = (lat: number, lng: number, zoomLevel: number = 7) => {
@@ -536,8 +587,37 @@ export const OceanExplorer: React.FC<OceanExplorerProps> = ({
                   <span className={`w-2 h-2 rounded-full ${showArgo ? 'bg-cyan-400 shadow-glow-sm' : 'bg-slate-600'}`}></span>
                   <span>In-Situ ARGO Network</span>
                 </div>
-                <span className="text-[9px] text-cyan-400/80">{currentRegion.argoFloats.length}</span>
+                <span className="text-[9px] text-cyan-400/80">{floats.length}{useRealFloats ? ' real' : ' sim'}</span>
               </button>
+
+              {/* Model product overlay */}
+              <div className="pt-1.5 mt-1 border-t border-slate-800 space-y-1.5">
+                <label className="flex items-center justify-between gap-2 text-slate-300">
+                  <span>Model product</span>
+                  <select
+                    value={overlay}
+                    onChange={(e) => setOverlay(e.target.value as ProductVar | 'none')}
+                    className="bg-[#050e1f] border border-slate-700 rounded px-1.5 py-0.5 text-[10px] text-slate-200"
+                  >
+                    <option value="none">None</option>
+                    <option value="tchp">Cyclone heat potential</option>
+                    <option value="d26">26 °C isotherm depth</option>
+                    <option value="mld">Mixed-layer depth</option>
+                    <option value="sld">Sonic layer depth</option>
+                    <option value="sigma100">Uncertainty at 100 m</option>
+                  </select>
+                </label>
+                {overlayGrid && (
+                  <div className="text-[9px] text-slate-400">
+                    <div className="h-1.5 rounded" style={{ background: RAMP_CSS }} />
+                    <div className="flex justify-between mt-0.5">
+                      <span>{PRODUCT_RANGE[overlayGrid.var][0]}</span>
+                      <span>{overlayGrid.units} · {overlayGrid.date}</span>
+                      <span>{PRODUCT_RANGE[overlayGrid.var][1]}</span>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>
@@ -587,7 +667,7 @@ export const OceanExplorer: React.FC<OceanExplorerProps> = ({
                       : 'text-slate-400 hover:text-slate-200'
                   }`}
                 >
-                  ARGO ({currentRegion.argoFloats.length})
+                  ARGO ({floats.length})
                 </button>
                 <button
                   onClick={() => setActiveTab('export')}
@@ -771,10 +851,12 @@ export const OceanExplorer: React.FC<OceanExplorerProps> = ({
               {activeTab === 'argo' && (
                 <div className="space-y-2.5">
                   <div className="text-[10px] text-slate-400 mb-2">
-                    Active floats profiling vertical temperature every 10 days for validation and truth-checking.
+                    {useRealFloats
+                      ? 'Real ARGO floats with good-QC profiles in Feb–Mar 2024 (latest profile shown). Used to validate the model in Truth Check.'
+                      : 'Simulated floats (the API is offline or this basin has no data).'}
                   </div>
 
-                  {currentRegion.argoFloats.map((f) => (
+                  {floats.map((f) => (
                     <div
                       key={f.id}
                       onClick={() => flyToCoord(f.lat, f.lng, 8)}
@@ -785,7 +867,7 @@ export const OceanExplorer: React.FC<OceanExplorerProps> = ({
                           <Anchor className="w-3 h-3 text-cyan-400" />
                           <span className="font-bold text-xs text-cyan-300 group-hover:text-cyan-200">#{f.id}</span>
                         </div>
-                        <span className="text-[9px] text-slate-400">{f.cycles} cycles</span>
+                        <span className="text-[9px] text-slate-400">{f.cycles} {useRealFloats ? 'profiles' : 'cycles'}</span>
                       </div>
                       <div className="text-[10px] text-slate-300 space-y-0.5">
                         <div>Location: <span className="text-white">{f.lat}°N, {f.lng}°E</span></div>
