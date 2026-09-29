@@ -100,3 +100,15 @@ def load(nc_path: Path = DATASET_PATH) -> OceanData:
         doy=np.array([pd.Timestamp(t).day_of_year for t in ds["time"].values], dtype=np.float32),
         times=ds["time"].values,
     )
+
+
+def nearest_ocean(data: OceanData, lat: float, lon: float) -> tuple[int, int] | None:
+    """Nearest ocean pixel (i, j) for a point inside the grid bounds (half a cell of margin), else None."""
+    step = float(data.lat[1] - data.lat[0])
+    if not (data.lat[0] - step / 2 <= lat <= data.lat[-1] + step / 2
+            and data.lon[0] - step / 2 <= lon <= data.lon[-1] + step / 2):
+        return None
+    ii, jj = np.nonzero(data.static[0] > 0.5)
+    d2 = (data.lat[ii] - lat) ** 2 + ((data.lon[jj] - lon) * np.cos(np.radians(lat))) ** 2
+    k = int(np.argmin(d2))
+    return int(ii[k]), int(jj[k])

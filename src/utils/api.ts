@@ -20,8 +20,9 @@ export interface ReconstructResponse {
   truth: Array<number | null> | null;
   valid_depths: boolean[];
   seafloor_depth_m: number | null;
-  /** Per-depth test RMSE (°C), usable as a ±1σ band */
+  /** Calibrated ensemble ±1σ (°C) at this cell and depth */
   uncertainty_c: number[] | null;
+  products: ProfileProducts;
   embedding: number[];
   embedding_dim: number;
   surface: SurfaceInputs & { lat: number; lng: number; doy: number };
@@ -52,6 +53,65 @@ export interface ReconstructResponse {
   };
 }
 
+export interface ProfileProducts {
+  mld_m: number | null;
+  d26_m: number | null;
+  tchp_kj_cm2: number | null;
+  sld_m: number | null;
+  below_layer_gradient_ms_per_100m: number | null;
+  sound_speed_ms: Array<number | null>;
+  salinity_assumed_psu: Array<number | null>;
+}
+
+type ErrStats = { n: number; rmse: number | null; mae: number | null; bias: number | null };
+export type ArgoPredictor = 'model' | 'glorys' | 'climatology' | 'persistence';
+type ArgoBlock = {
+  overall: Record<ArgoPredictor, ErrStats>;
+  per_depth: Array<{ depth_m: number } & Record<ArgoPredictor, ErrStats>>;
+};
+
+export interface ArgoSummary extends ArgoBlock {
+  source: string;
+  n_profiles: number;
+  n_floats: number;
+  n_profiles_test: number;
+  test: ArgoBlock;
+  all_days: ArgoBlock;
+  coverage: { nominal: number; all_days: number | null; test: number | null };
+}
+
+export interface ArgoMatchup {
+  platform: string;
+  cycle: number;
+  time: string;
+  date: string;
+  data_mode: string;
+  lat: number;
+  lon: number;
+  split: 'train' | 'val' | 'test';
+  grid_point: { lat: number; lng: number };
+  depths_m: number[];
+  argo: Array<number | null>;
+  argo_psal: Array<number | null>;
+  model: Array<number | null>;
+  sigma: Array<number | null>;
+  glorys: Array<number | null>;
+}
+
+export type ProductVar = 'tchp' | 'd26' | 'mld' | 'sld' | 'sigma100';
+
+export interface ProductGrid {
+  var: ProductVar;
+  name: string;
+  units: string;
+  date: string;
+  lat: number[];
+  lon: number[];
+  values: Array<Array<number | null>>;
+  stats: { min: number | null; max: number | null; mean: number | null };
+  thresholds: { watch: number; high: number } | null;
+}
+
 export interface MetricsResponse {
   model: ReconstructResponse['model'];
   train_log?: {
@@ -67,6 +127,19 @@ export interface MetricsResponse {
     baselines?: Record<string, { rmse: number; mae: number; bias: number; corr: number }>;
     overall: { rmse: number; mae: number; bias: number; corr: number; meets_sih_target: boolean };
     per_depth: Array<{ depth_m: number; rmse: number; mae: number; bias: number; corr: number }>;
+    ensemble?: { n_members: number; member_test_rmse: number[] };
+    calibration?: {
+      test_glorys: { nominal: number; overall: number; per_depth: number[] };
+      argo?: { nominal: number; all_days: number | null; test: number | null };
+    };
+    importance?: {
+      method: string;
+      channels: string[];
+      depths_m: number[];
+      base_rmse: number[];
+      delta_rmse: number[][];
+    };
+    argo?: ArgoSummary;
   };
 }
 
@@ -136,4 +209,18 @@ export function describeLineage(l?: FieldLineage): string | undefined {
   if (!l) return undefined;
   const when = l.date ? ` · ${l.date.replace('T', ' ')}` : '';
   return `${l.source}${when}${l.live ? ' (live)' : ''}`;
+}
+
+export const BULLETIN_URL = `${API_BASE}/bulletin`;
+
+export async function fetchProductGrid(variable: ProductVar, date = DEFAULT_DATE): Promise<ProductGrid> {
+  const res = await fetch(`${API_BASE}/products?${new URLSearchParams({ var: variable, date })}`);
+  if (!res.ok) throw new Error(`Product request failed (${res.status})`);
+  return res.json();
+}
+
+export async function fetchArgo(): Promise<{ summary: ArgoSummary | null; profiles: ArgoMatchup[] }> {
+  const res = await fetch(`${API_BASE}/argo`);
+  if (!res.ok) throw new Error(`ARGO request failed (${res.status})`);
+  return res.json();
 }

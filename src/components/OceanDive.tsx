@@ -19,6 +19,14 @@ interface OceanDiveProps {
   onNavigateTo?: (view: any, coords?: { lat: number; lng: number }) => void;
 }
 
+type Metric = 'temp' | 'salinity' | 'sound';
+
+const METRICS: Record<Metric, { label: string; title: string; key: Metric; unit: string; color: string; domain: [number | string, number | string] }> = {
+  temp: { label: 'Temperature (°C)', title: 'Temperature vs. Depth', key: 'temp', unit: '°C', color: '#22d3ee', domain: [0, 32] },
+  salinity: { label: 'Salinity (PSU)', title: 'Salinity vs. Depth', key: 'salinity', unit: 'PSU', color: '#f59e0b', domain: [32, 37] },
+  sound: { label: 'Sound speed (m/s)', title: 'Sound Speed vs. Depth', key: 'sound', unit: 'm/s', color: '#a78bfa', domain: ['auto', 'auto'] },
+};
+
 export const OceanDive: React.FC<OceanDiveProps> = ({
   coordinates,
   region = 'bob',
@@ -26,7 +34,7 @@ export const OceanDive: React.FC<OceanDiveProps> = ({
 }) => {
   const [selectedDepthIndex, setSelectedDepthIndex] = useState(0);
   const [showConfidence, setShowConfidence] = useState(false);
-  const [activeMetric, setActiveMetric] = useState<'temp' | 'salinity'>('temp');
+  const [activeMetric, setActiveMetric] = useState<Metric>('temp');
 
   const regionData = REGION_CONFIGS[region];
   const physicsVars = getPhysicalVariables(coordinates.lat, coordinates.lng, region);
@@ -34,14 +42,19 @@ export const OceanDive: React.FC<OceanDiveProps> = ({
   const { result, status } = useNeuralProfile(coordinates.lat, coordinates.lng, region);
   const live = status === 'live' && result !== null;
 
-  // Temperature and its ±1σ band come from the neural model when the API is up; salinity stays physics-based
-  const profileData = live
+  // Temperature, its ±1σ band and sound speed come from the model when the API is up; salinity stays physics-based
+  const profileData: Array<(typeof physicsProfile)[number] & { sound?: number }> = live
     ? physicsProfile.map((pt, i) => ({
         ...pt,
         temp: Number(result.temperatures[i].toFixed(2)),
         ci: Number((result.uncertainty_c?.[i] ?? pt.ci).toFixed(2)),
+        sound: result.products.sound_speed_ms[i] ?? undefined,
       }))
     : physicsProfile;
+  const metric = METRICS[activeMetric === 'sound' && !live ? 'temp' : activeMetric];
+  const prod = live ? result.products : null;
+  const levelValue = (pt: (typeof profileData)[number]) =>
+    metric.key === 'temp' ? pt.temp : metric.key === 'salinity' ? pt.salinity : pt.sound ?? '—';
   const activeVars = live
     ? {
         ...physicsVars,
@@ -92,26 +105,21 @@ export const OceanDive: React.FC<OceanDiveProps> = ({
         <div className="flex items-center gap-2">
           {/* Temperature / Salinity toggle */}
           <div className="flex bg-[#040c1a]/90 p-0.5 rounded-lg border border-navy-border text-xs font-mono">
-            <button
-              onClick={() => setActiveMetric('temp')}
-              className={`px-2.5 py-1 rounded text-[10px] transition-all ${
-                activeMetric === 'temp'
-                  ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-400/30 font-bold'
-                  : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              Temperature (°C)
-            </button>
-            <button
-              onClick={() => setActiveMetric('salinity')}
-              className={`px-2.5 py-1 rounded text-[10px] transition-all ${
-                activeMetric === 'salinity'
-                  ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-400/30 font-bold'
-                  : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              Salinity (PSU)
-            </button>
+            {(Object.keys(METRICS) as Metric[]).map((m) => (
+              <button
+                key={m}
+                onClick={() => setActiveMetric(m)}
+                disabled={m === 'sound' && !live}
+                title={m === 'sound' && !live ? 'Needs the model API' : undefined}
+                className={`px-2.5 py-1 rounded text-[10px] transition-all disabled:opacity-40 ${
+                  metric.key === m
+                    ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-400/30 font-bold'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                {METRICS[m].label}
+              </button>
+            ))}
           </div>
 
           <button
@@ -210,13 +218,11 @@ export const OceanDive: React.FC<OceanDiveProps> = ({
 
                 <div className="glass-card p-3.5 rounded-xl border border-navy-border">
                   <div className="text-[9px] font-mono text-text-muted mb-1">
-                    {activeMetric === 'temp' ? 'TEMPERATURE' : 'SALINITY'}
+                    {metric.label.split(' (')[0].toUpperCase()}
                   </div>
                   <div className="font-mono text-2xl font-bold text-text-heading">
-                    {activeMetric === 'temp' ? currentLevel.temp : currentLevel.salinity}
-                    <span className="text-sm font-normal text-accent ml-1">
-                      {activeMetric === 'temp' ? '°C' : 'PSU'}
-                    </span>
+                    {levelValue(currentLevel)}
+                    <span className="text-sm font-normal text-accent ml-1">{metric.unit}</span>
                   </div>
                   {showConfidence && (
                     <div className="mt-1 text-[10px] font-mono text-violet-400">
@@ -239,10 +245,27 @@ export const OceanDive: React.FC<OceanDiveProps> = ({
                   <span className="text-slate-500">Mixed Layer Depth (MLD):</span>
                   <span className="text-emerald-300 font-bold">{activeVars.mld} m</span>
                 </div>
-                <div className="flex justify-between text-slate-300">
-                  <span className="text-slate-500">Ocean Heat Content (OHC):</span>
-                  <span className="text-cyan-300 font-bold">{activeVars.ohc} kJ/cm²</span>
-                </div>
+                {prod ? (
+                  <>
+                    <div className="flex justify-between text-slate-300">
+                      <span className="text-slate-500">Cyclone heat potential (TCHP):</span>
+                      <span className="text-red-300 font-bold">{prod.tchp_kj_cm2 ?? '—'} kJ/cm²</span>
+                    </div>
+                    <div className="flex justify-between text-slate-300">
+                      <span className="text-slate-500">26 °C isotherm depth (D26):</span>
+                      <span className="text-orange-300 font-bold">{prod.d26_m ?? '—'} m</span>
+                    </div>
+                    <div className="flex justify-between text-slate-300">
+                      <span className="text-slate-500">Sonic layer depth (SLD):</span>
+                      <span className="text-violet-300 font-bold">{prod.sld_m ?? '—'} m</span>
+                    </div>
+                  </>
+                ) : (
+                  <div className="flex justify-between text-slate-300">
+                    <span className="text-slate-500">Ocean Heat Content (OHC, simulated):</span>
+                    <span className="text-cyan-300 font-bold">{activeVars.ohc} kJ/cm²</span>
+                  </div>
+                )}
                 <div className="flex justify-between text-slate-300">
                   <span className="text-slate-500">Surface Salinity (SSS):</span>
                   <span className="text-amber-300 font-bold">{activeVars.sss} PSU</span>
@@ -289,14 +312,14 @@ export const OceanDive: React.FC<OceanDiveProps> = ({
             <div className="flex items-center gap-2">
               <Activity className="w-4 h-4 text-accent" />
               <h3 className="text-sm font-semibold text-text-heading">
-                {activeMetric === 'temp' ? 'Temperature vs. Depth' : 'Salinity vs. Depth'}
+                {metric.title}
               </h3>
             </div>
             <span className="font-mono text-[10px] text-text-muted">MLD: {activeVars.mld}m</span>
           </div>
 
           <div className="flex-1 relative min-h-0">
-            {showConfidence && activeMetric === 'temp' && (
+            {showConfidence && metric.key === 'temp' && (
               <div className="absolute inset-0 pointer-events-none z-10 rounded-lg overflow-hidden">
                 <div
                   className="w-full h-full"
@@ -318,8 +341,8 @@ export const OceanDive: React.FC<OceanDiveProps> = ({
               >
                 <XAxis
                   type="number"
-                  domain={activeMetric === 'temp' ? [0, 32] : [32, 37]}
-                  unit={activeMetric === 'temp' ? '°C' : ' PSU'}
+                  domain={metric.domain}
+                  unit={` ${metric.unit}`}
                   stroke="#334155"
                   tick={{ fill: '#94a3b8', fontSize: 10, fontFamily: 'JetBrains Mono' }}
                 />
@@ -341,6 +364,7 @@ export const OceanDive: React.FC<OceanDiveProps> = ({
                         <div className="text-accent font-bold">{d.depth} m</div>
                         <div className="text-text-heading">Temperature: {d.temp} °C</div>
                         <div className="text-amber-300">Salinity: {d.salinity} PSU</div>
+                        {d.sound !== undefined && <div className="text-violet-300">Sound speed: {d.sound} m/s</div>}
                         {showConfidence && <div className="text-violet-400">± {d.ci}°C</div>}
                       </div>
                     );
@@ -348,14 +372,14 @@ export const OceanDive: React.FC<OceanDiveProps> = ({
                 />
                 <Line
                   type="monotone"
-                  dataKey={activeMetric === 'temp' ? 'temp' : 'salinity'}
-                  stroke={activeMetric === 'temp' ? '#22d3ee' : '#f59e0b'}
+                  dataKey={metric.key}
+                  stroke={metric.color}
                   strokeWidth={2}
-                  dot={{ r: 3, fill: activeMetric === 'temp' ? '#22d3ee' : '#f59e0b', strokeWidth: 0 }}
+                  dot={{ r: 3, fill: metric.color, strokeWidth: 0 }}
                   activeDot={{
                     r: 5,
                     fill: '#f0f9ff',
-                    stroke: activeMetric === 'temp' ? '#22d3ee' : '#f59e0b',
+                    stroke: metric.color,
                     strokeWidth: 2,
                   }}
                 />
@@ -372,6 +396,14 @@ export const OceanDive: React.FC<OceanDiveProps> = ({
                     position: 'insideRight',
                   }}
                 />
+                {metric.key === 'sound' && prod?.sld_m != null && prod.sld_m > 0 && (
+                  <ReferenceLine
+                    y={prod.sld_m}
+                    stroke="#a78bfa"
+                    strokeDasharray="4 2"
+                    label={{ value: `SLD ${prod.sld_m}m`, fill: '#a78bfa', fontSize: 9, fontFamily: 'JetBrains Mono', position: 'insideRight' }}
+                  />
+                )}
                 {/* MLD Indicator Line */}
                 <ReferenceLine
                   y={activeVars.mld}
@@ -393,7 +425,7 @@ export const OceanDive: React.FC<OceanDiveProps> = ({
           <div className="mt-3 p-3 rounded-lg bg-navy-deep/60 border border-navy-border font-mono text-xs flex justify-between items-center text-text-muted">
             <span>ACTIVE LEVEL:</span>
             <span className="text-accent font-bold text-glow">
-              {activeMetric === 'temp' ? `${currentLevel.temp} °C` : `${currentLevel.salinity} PSU`} @ {currentLevel.depth}m
+              {levelValue(currentLevel)} {metric.unit} @ {currentLevel.depth}m
             </span>
           </div>
         </div>

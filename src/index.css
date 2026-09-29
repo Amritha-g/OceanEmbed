@@ -180,3 +180,8 @@
   border: 1px solid rgba(0, 240, 255, 0.35) !important;
 }
 
+
+/* Model product overlay: keep 0.25° cells crisp instead of smoothing them */
+.pixelated-overlay {
+  image-rendering: pixelated;
+}

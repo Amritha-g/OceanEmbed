@@ -1,5 +1,6 @@
 import React from 'react';
-import { Radio, Clock } from 'lucide-react';
+import { Radio, FileText } from 'lucide-react';
+import { BULLETIN_URL } from '../utils/api';
 
 export type ViewType = 'home' | 'explorer' | 'dive' | 'reconstruction' | 'truth-check' | 'intelligence';
 
@@ -60,12 +61,16 @@ export const Navbar: React.FC<NavbarProps> = ({ activeView, onSelectView }) => {
       {/* ── Right Telemetry ───────────────────────────────── */}
       <div className="flex items-center gap-2 text-[10px] font-mono shrink-0">
 
-        {/* Inference Time */}
-        <div className="hidden lg:flex items-center gap-1.5 bg-[#0b101c] px-3 py-[5px] rounded-full border border-white/10">
-          <Clock className="w-3 h-3 text-slate-500" />
-          <span className="text-slate-500 tracking-wider">INFERENCE:</span>
-          <span className="font-bold text-cyan-400">11.4 ms</span>
-        </div>
+        {/* Daily bulletin (server-rendered, printable to PDF) */}
+        <a
+          href={BULLETIN_URL}
+          target="_blank"
+          rel="noreferrer"
+          className="hidden lg:flex items-center gap-1.5 bg-[#0b101c] px-3 py-[5px] rounded-full border border-white/10 hover:border-cyan-400/40 transition-colors"
+        >
+          <FileText className="w-3 h-3 text-cyan-400" />
+          <span className="font-bold text-cyan-400 tracking-wider">DAILY BULLETIN</span>
+        </a>
 
         {/* INCOIS */}
         <div className="hidden sm:flex items-center gap-1.5 bg-[#0b101c] px-3 py-[5px] rounded-full border border-white/10">

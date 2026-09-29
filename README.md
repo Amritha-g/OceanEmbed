@@ -130,13 +130,18 @@ npm run dev
 # 1. Install Python dependencies
 pip install -r requirements.txt
 
-# 2. Train the model (optional — pre-trained checkpoint model/best_model.pt is provided)
-python model/train.py --no_doy --sst_demean
+# 2. Train the 5-member ensemble (optional — trained members are in model/ensemble/)
+for k in 0 1 2 3 4; do
+  python model/train.py --no_doy --sst_demean --lambda_smooth 0.1 --seed $k --out model/ensemble/member_$k.pt
+done
 
-# 3. Evaluate on held-out test days (20–31 Mar 2024)
+# 3. Fetch real ARGO floats for validation (public, no login)
+python scripts/fetch_argo.py
+
+# 4. Evaluate: calibrates uncertainty, scores test days and ARGO, computes input importance
 python model/eval.py
 
-# 4. Launch FastAPI Inference Server
+# 5. Launch FastAPI Inference Server
 python model/serve.py
 # or: uvicorn api.main:app --host 0.0.0.0 --port 8000
 # → Swagger API Docs available at http://localhost:8000/docs
@@ -146,13 +151,13 @@ python model/serve.py
 
 ## Deep Learning Model Architecture & Performance
 
-OceanEmbed uses a **residual U-Net encoder + per-pixel depth decoder** (`model/ocean_embed.py`, ~2.2M parameters):
+OceanEmbed uses a **deep ensemble of five residual U-Net encoders + per-pixel depth decoders** (`model/ocean_embed.py`, `model/ensemble.py`, ~2.2M parameters each). The prediction is the ensemble mean; the spread between members, calibrated on the validation days, is the ±σ uncertainty on every pixel and depth:
 
 - **Input:** 7 satellite surface channels (`SST`, `SSS`, `SLA`, `u_cur`, `v_cur`, `u_wind`, `v_wind`) + latitude, longitude, ocean mask and seafloor depth. Normalisation statistics are computed from the training days.
 - **SST skip connection:** each depth adds a fixed, data-derived multiple of the SST anomaly (≈0.9 near the surface, ≈0 below 75 m). The CNN only sees the *spatial* SST pattern, so basin-wide warming reaches the output through this physical link and the model extrapolates to days warmer than any it trained on.
 - **Encoder:** three-scale residual U-Net (GroupNorm, SiLU) producing a 48-dimensional embedding per pixel.
 - **Decoder:** 1×1 convolutional MLP predicting all 15 depth levels at once.
-- **Loss:** MSE over ocean cells only (land and below-seafloor cells are masked), plus a penalty on temperature inversions below 30 m.
+- **Loss:** MSE over ocean cells only (land and below-seafloor cells are masked), a penalty on temperature inversions below 30 m, and a penalty on the error's curvature along depth (`--lambda_smooth`).
 - Day-of-year is **not** used: with a single 60-day season it acts as a date index and hurts generalisation (`--no_doy`).
 
 ### Evaluation (held-out 20–31 March 2024, ocean cells only)
@@ -164,14 +169,15 @@ Days are split chronologically — train 1 Feb–13 Mar, validation 14–19 Mar 
 | Per-pixel training-period mean | 1.036 °C | 0.753 °C | −0.38 °C |
 | Persistence (last training day) | 0.847 °C | 0.568 °C | −0.27 °C |
 | Original ResNet model, same split | 0.650 °C | 0.467 °C | −0.21 °C |
-| **OceanEmbedNet (current)** | **0.514 °C** | **0.357 °C** | **−0.02 °C** |
+| Single OceanEmbedNet | 0.514 °C | 0.357 °C | −0.02 °C |
+| **5-member ensemble (current)** | **0.468 °C** | **0.325 °C** | **−0.03 °C** |
 
-Error by depth: ~0.4 °C in the upper 20 m, 0.63–0.76 °C through the thermocline (50–150 m), ~0.19 °C below 300 m. The SIH target of RMSE < 0.5 °C is **not yet met** on held-out days. The test set is only 12 days from one season, so treat these numbers as indicative; extending `dataset.nc` beyond 60 days is the main lever for improving them.
+Error by depth: ~0.4 °C in the upper 20 m, 0.59–0.66 °C through the thermocline (50–150 m), ~0.18 °C below 300 m. The ensemble meets the SIH target of RMSE < 0.5 °C on held-out days; each member alone scores 0.506–0.520 °C. The test set is only 12 days from one season, so treat these numbers as indicative; extending `dataset.nc` beyond 60 days is the main lever for improving them.
 
 > Earlier versions of this README reported 0.214 °C. That figure included land/fill cells and used a random day split, so validation days were effectively seen in training.
 
 ```bash
-python model/train.py --no_doy --sst_demean   # recipe for the shipped checkpoint
+python model/train.py --no_doy --sst_demean --lambda_smooth 0.1 --seed 0 --out model/ensemble/member_0.pt  # one member (seeds 0-4)
 python model/eval.py                          # writes model/metrics.json
 ```
 
@@ -225,6 +231,42 @@ All RMSE figures are on the held-out test days (20–31 March 2024), ocean cells
 - **`/api/v1/profile` added.** It snaps the requested point to the nearest ocean cell and runs the model on the full grid with that day's real satellite inputs. The old endpoint fed a zero-padded 1×1 input the model never saw in training. The response includes the GLORYS12 truth and a per-depth uncertainty (the test RMSE).
 - **Experimental live inputs (`source=live`).** `/api/v1/profile?source=live` and `/reconstruct` with `"source": "live"` replace SST, currents and winds with current Open-Meteo readings (`model/live_feed.py`). Open-Meteo has no salinity or sea level, so those stay at the latest archive day. Every response carries per-field `lineage` (source, date, live flag), and live responses drop the GLORYS truth and carry a `warning`. Open-Meteo is not one of the training sources and the model has only seen Feb–Mar 2024, so treat live output as indicative. Explorer and Reconstruction have an Archive / Live toggle.
 - **Frontend screens use the live model.** Explorer, Ocean Dive, Reconstruction and Truth Check use the model and real inputs when the API is up, and fall back to the physics engine when it is not. Truth Check now compares against GLORYS12 instead of a simulated float.
+
+---
+
+## Validation, Uncertainty and Derived Products
+
+These implement the "quick win" features from the solution document (`OceanEmbed_Solution_Document.pdf`, section 5).
+
+### A4. Validation against real ARGO floats
+`scripts/fetch_argo.py` downloads every ARGO profile in the domain for Feb–Mar 2024 from the Ifremer ERDDAP server (no login), keeps QC flags 1–2 and interpolates each profile to the 15 standard depths: **101 profiles from 19 floats**, 95 of them delayed-mode. `model/argo_eval.py` matches each profile to the nearest ocean cell on the same UTC day and scores four predictors. On the **17 profiles from held-out test days**:
+
+| Predictor | RMSE vs ARGO | RMSE 50–200 m |
+|---|---|---|
+| **OceanEmbed ensemble** | **0.783 °C** | **1.147 °C** |
+| GLORYS12 (the training target) | 0.776 °C | 1.141 °C |
+| Climatology (per-pixel training mean) | 1.029 °C | 1.372 °C |
+| Persistence (last training day) | 1.128 °C | 1.646 °C |
+
+The model is **24% better than climatology** on real floats (16% in the 50–200 m thermocline) and within 0.01 °C of the reanalysis it learns from. Part of every predictor's error is representativeness: ARGO measures a point, the grid is a 0.25° average. Truth Check lets you pick any float by WMO ID and compare its profile with the model's 90% interval and GLORYS.
+
+### A3. Calibrated uncertainty
+The ensemble spread is scaled per depth on the validation days (`model/ensemble/calibration.json`) so that the mean ± 1.645σ interval should hold 90% of values. On held-out test days it holds **87%** of GLORYS values but only **63%** of ARGO values: the model's σ describes its error against the gridded reanalysis, not the extra point-versus-cell mismatch. The σ is shown in Ocean Dive, Truth Check and as a map layer.
+
+### A2. Physics-informed loss
+Masked MSE (land and below-seafloor excluded), a penalty on temperature inversions below 30 m, and a penalty on the second difference of the error along depth.
+
+### A5. What drives each depth
+Input ablation on the test days (replace one channel with its training mean, measure the RMSE rise). SST controls the mixed layer (+0.7 °C at 0–10 m), sea-level anomaly controls the thermocline (+1.0 °C at 75–100 m), and salinity and currents matter at 75–150 m. Removing either wind component changes nothing, so the model does not use the winds at all. Shown as a heatmap in the AI Engine view.
+
+### B1. Cyclone heat potential and D26 · B4. Sound speed and sonic layer
+`model/products.py` derives, per profile and per grid cell: mixed-layer depth (ΔT = 0.5 °C), depth of the 26 °C isotherm, tropical cyclone heat potential (ρ·c<sub>p</sub>·∫(T − 26) dz, kJ/cm²), Mackenzie (1981) sound speed and the sonic layer depth. Salinity below the surface is not reconstructed, so sound speed uses an assumed profile (SSS in the mixed layer, relaxing to 35 PSU below). `GET /api/v1/products?var=tchp|d26|mld|sld|sigma100` serves daily maps, shown as an overlay in Ocean Map; Ocean Dive shows the per-profile values and a sound-speed view.
+
+### C3. Daily bulletin
+`GET /api/v1/bulletin?date=` returns a printable page (browser Print → PDF) with the day's TCHP hotspot, the share of ocean above the 50 and 90 kJ/cm² thresholds, four maps and the ARGO skill line. Linked from the navbar.
+
+### Not yet done
+Self-supervised pre-training (A1), subsurface marine heatwaves (B2), fishing-zone advisories (B3), the near-real-time forecast (C1), the cyclone case study and the Phase 0 data re-download all need multi-year data, cyclone tracks, chlorophyll or Copernicus/Earthdata credentials. The cyclone track, heatwave zones and two Intelligence indicators (heat anomaly, stratification) are still simulated.
 
 ---
 

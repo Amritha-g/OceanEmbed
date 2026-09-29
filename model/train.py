@@ -87,7 +87,7 @@ def train(args):
     for p in ema.parameters():
         p.requires_grad_(False)
 
-    criterion = OceanEmbedLoss(lambda_strat=args.lambda_strat)
+    criterion = OceanEmbedLoss(lambda_strat=args.lambda_strat, lambda_smooth=args.lambda_smooth)
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.wd)
     steps_per_epoch = max(1, len(train_days) // args.batch)
     total = args.epochs * steps_per_epoch
@@ -97,12 +97,24 @@ def train(args):
 
     best_val_rmse = float('inf')
     log = {'train_loss': [], 'val_rmse': [], 'val_mae': []}
+    start_epoch = 1
+    if args.resume and Path(args.out).exists():
+        # Checkpoints hold EMA weights only: restart from them with the LR schedule fast-forwarded.
+        # The optimizer's moment estimates start fresh, so this is close to, not identical to, a full run.
+        ckpt = torch.load(args.out, map_location=device)
+        model.load_state_dict(ckpt['model_state'])
+        ema.load_state_dict(ckpt['model_state'])
+        start_epoch = ckpt['epoch'] + 1
+        best_val_rmse = ckpt['val_rmse']
+        for _ in range((start_epoch - 1) * steps_per_epoch):
+            scheduler.step()
+        print(f"[Train] Resumed {args.out} at epoch {start_epoch} (best val RMSE {best_val_rmse:.4f}°C)")
     save_path = Path(args.out)
     val_y = t.y[val_days]
     val_valid = t.valid.expand(len(val_days), -1, -1, -1)
     crop = (args.crop_h, args.crop_w)
 
-    for epoch in range(1, args.epochs + 1):
+    for epoch in range(start_epoch, args.epochs + 1):
         model.train()
         t0 = time.time()
         train_loss = 0.0
@@ -147,7 +159,7 @@ def train(args):
             print(f"Epoch {epoch:3d}/{args.epochs} | Loss={train_loss:.4f} | Val RMSE={rmse:.3f}°C | "
                   f"MAE={mae:.3f}°C | {time.time() - t0:.1f}s{saved}", flush=True)
 
-    log_path = save_path.parent / "train_log.json"
+    log_path = save_path.parent / ("train_log.json" if save_path.stem == "best_model" else f"{save_path.stem}_log.json")
     log_path.write_text(json.dumps(log, indent=2))
     print(f"\n[Done] Best Val RMSE: {best_val_rmse:.4f} °C")
     print(f"[Done] Model saved to {save_path}")
@@ -168,9 +180,11 @@ if __name__ == '__main__':
     parser.add_argument('--crop_h',       type=int,   default=48)
     parser.add_argument('--crop_w',       type=int,   default=64)
     parser.add_argument('--lambda_strat', type=float, default=0.05)
+    parser.add_argument('--lambda_smooth', type=float, default=0.0, help='Weight of error-curvature penalty along depth')
     parser.add_argument('--no_doy',       action='store_true', help='Drop day-of-year input (recommended for single-season data)')
     parser.add_argument('--sst_demean',   action='store_true', help='Give the CNN only spatial SST anomalies')
     parser.add_argument('--seed',         type=int,   default=0)
     parser.add_argument('--log_every',    type=int,   default=20)
+    parser.add_argument('--resume',       action='store_true', help='Continue from the checkpoint at --out')
     parser.add_argument('--out',          type=str,   default=str(Path(__file__).resolve().parent / "best_model.pt"))
     train(parser.parse_args())
