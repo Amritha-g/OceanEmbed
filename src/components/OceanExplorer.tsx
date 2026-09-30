@@ -1,13 +1,17 @@
 import React, { useState, useEffect, useRef } from 'react';
 import L from 'leaflet';
 import { useNeuralProfile } from '../hooks/useNeuralProfile';
-import { DataSource, DEFAULT_DATE, describeLineage, fetchProductGrid, ProductGrid, ProductVar, SurfaceField } from '../utils/api';
+import {
+  DataSource, DEFAULT_DATE, describeLineage, fetchProductGrid, fetchTransect, LatLng, pointBulletinUrl,
+  ProductGrid, ProductVar, SurfaceField, TransectResponse,
+} from '../utils/api';
 import { useArgo } from '../hooks/useArgo';
 import { gridToDataUrl, PRODUCT_RANGE, RAMP_CSS } from '../utils/colormap';
 import { SourceToggle } from './SourceToggle';
+import { TransectSection } from './TransectSection';
 import {
   Layers, ChevronRight, Anchor,
-  Sun, Moon, Globe, Eye, EyeOff, Activity
+  Sun, Moon, Globe, Eye, EyeOff, Activity, Route, FileText, Loader2
 } from 'lucide-react';
 
 interface SelectedPoint {
@@ -57,6 +61,17 @@ const MAP_THEMES = {
   },
 };
 
+// Preset sections per region. The model grid covers the Bay of Bengal only (8–22°N, 80–100°E),
+// so an Arabian Sea section would be all land/outside-domain and none are offered there.
+const TRANSECT_PRESETS: Record<ActiveRegion, Array<{ label: string; points: LatLng[] }>> = {
+  bob: [
+    { label: 'Chennai → Port Blair', points: [{ lat: 13.08, lng: 80.29 }, { lat: 11.62, lng: 92.73 }] },
+    { label: '88°E meridional', points: [{ lat: 8.0, lng: 88.0 }, { lat: 21.5, lng: 88.0 }] },
+    { label: 'Along 15°N', points: [{ lat: 15.0, lng: 80.5 }, { lat: 15.0, lng: 97.5 }] },
+  ],
+  as: [],
+};
+
 export const OceanExplorer: React.FC<OceanExplorerProps> = ({
   onExploreProfile,
   onRegionChange,
@@ -89,6 +104,15 @@ export const OceanExplorer: React.FC<OceanExplorerProps> = ({
   const [overlay, setOverlay] = useState<ProductVar | 'none'>('none');
   const [overlayGrid, setOverlayGrid] = useState<ProductGrid | null>(null);
   const selectedMarkerRef = useRef<L.Marker | null>(null);
+
+  // Transect drawing and the resulting cross-section
+  const transectGroupRef = useRef<L.LayerGroup | null>(null);
+  const drawingRef = useRef(false);
+  const [drawing, setDrawing] = useState(false);
+  const [waypoints, setWaypoints] = useState<LatLng[]>([]);
+  const [transect, setTransect] = useState<TransectResponse | null>(null);
+  const [transectStatus, setTransectStatus] = useState<'idle' | 'loading' | 'error'>('idle');
+  const [transectHover, setTransectHover] = useState<number | null>(null);
 
   const currentRegion = REGION_CONFIGS[selectedRegion];
 
@@ -145,12 +169,21 @@ export const OceanExplorer: React.FC<OceanExplorerProps> = ({
 
     tileLayerRef.current = tile;
     layerGroupRef.current = L.layerGroup().addTo(map);
+    transectGroupRef.current = L.layerGroup().addTo(map);
     mapInstanceRef.current = map;
 
-    // Ocean Click Listener to sample coordinates
+    // Ocean Click Listener to sample coordinates (or add a transect vertex while drawing)
     map.on('click', (e: L.LeafletMouseEvent) => {
       const lat = +e.latlng.lat.toFixed(4);
       const lng = +e.latlng.lng.toFixed(4);
+      if (drawingRef.current) {
+        // A double-click to finish also fires two clicks at the same spot
+        setWaypoints((w) => {
+          const last = w[w.length - 1];
+          return last && Math.abs(last.lat - lat) < 1e-3 && Math.abs(last.lng - lng) < 1e-3 ? w : [...w, { lat, lng }];
+        });
+        return;
+      }
       setSelectedPoint({ lat, lng });
       setActiveTab('inspect');
       setIsPanelCollapsed(false);
@@ -186,6 +219,7 @@ export const OceanExplorer: React.FC<OceanExplorerProps> = ({
   const handleRegionChange = (r: ActiveRegion) => {
     setSelectedRegion(r);
     onRegionChange?.(r);
+    clearTransect();
     const target = REGION_CONFIGS[r];
 
     if (mapInstanceRef.current) {
@@ -388,6 +422,104 @@ export const OceanExplorer: React.FC<OceanExplorerProps> = ({
       selectedMarkerRef.current = targetMarker;
     }
   }, [selectedRegion, showHeatwave, showCyclone, showArgo, showPointCloud, selectedPoint, floats]);
+
+  // ── Transect: drawing mode, request, and map layer ───────────────────────
+  const runTransect = (points: LatLng[]) => {
+    if (points.length < 2) return;
+    setTransectStatus('loading');
+    fetchTransect(points)
+      .then((t) => {
+        setTransect(t);
+        setTransectStatus('idle');
+      })
+      .catch(() => setTransectStatus('error'));
+  };
+
+  const startDrawing = () => {
+    setWaypoints([]);
+    setTransect(null);
+    setTransectStatus('idle');
+    setDrawing(true);
+  };
+
+  const finishDrawing = (points = waypoints) => {
+    setDrawing(false);
+    runTransect(points);
+  };
+
+  const clearTransect = () => {
+    setDrawing(false);
+    setWaypoints([]);
+    setTransect(null);
+    setTransectStatus('idle');
+    setTransectHover(null);
+  };
+
+  const applyPreset = (points: LatLng[]) => {
+    setWaypoints(points);
+    setDrawing(false);
+    setTransect(null);
+    runTransect(points);
+    mapInstanceRef.current?.fitBounds(L.latLngBounds(points.map((p) => [p.lat, p.lng] as [number, number])).pad(0.3));
+  };
+
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    drawingRef.current = drawing;
+    if (!map) return;
+    // While drawing, the hazard layers would swallow clicks, so they are hidden
+    if (drawing) {
+      map.doubleClickZoom.disable();
+      if (layerGroupRef.current) map.removeLayer(layerGroupRef.current);
+      const finish = () => drawingRef.current && setDrawing(false);
+      map.on('dblclick', finish);
+      return () => {
+        map.off('dblclick', finish);
+      };
+    }
+    map.doubleClickZoom.enable();
+    if (layerGroupRef.current && !map.hasLayer(layerGroupRef.current)) layerGroupRef.current.addTo(map);
+  }, [drawing]);
+
+  // Double-click ends drawing; request the section once drawing stops with a usable line
+  const prevDrawing = useRef(false);
+  useEffect(() => {
+    if (prevDrawing.current && !drawing && waypoints.length >= 2 && !transect && transectStatus === 'idle') {
+      runTransect(waypoints);
+    }
+    prevDrawing.current = drawing;
+  }, [drawing]);
+
+  useEffect(() => {
+    const group = transectGroupRef.current;
+    if (!group) return;
+    group.clearLayers();
+    if (!waypoints.length) return;
+    const latlngs = waypoints.map((p) => [p.lat, p.lng] as [number, number]);
+    group.addLayer(L.polyline(latlngs, { color: '#0b1220', weight: 6, opacity: 0.6, interactive: false }));
+    group.addLayer(L.polyline(latlngs, {
+      color: '#00f0ff', weight: 3, opacity: 0.95, dashArray: drawing ? '6, 6' : undefined, interactive: false,
+    }));
+    waypoints.forEach((p, i) => {
+      const label = i === 0 ? 'A' : i === waypoints.length - 1 && !drawing ? 'B' : '';
+      group.addLayer(L.marker([p.lat, p.lng], {
+        interactive: false,
+        icon: L.divIcon({
+          className: 'transect-vertex',
+          html: `<div style="position:relative;width:12px;height:12px;border-radius:50%;background:#050b14;border:2px solid #00f0ff;">
+            ${label ? `<span style="position:absolute;left:12px;top:-14px;font:bold 11px monospace;color:#00f0ff;text-shadow:0 0 3px #000">${label}</span>` : ''}
+          </div>`,
+          iconSize: [12, 12],
+          iconAnchor: [6, 6],
+        }),
+      }));
+    });
+    if (transect && transectHover !== null) {
+      group.addLayer(L.circleMarker([transect.lat[transectHover], transect.lon[transectHover]], {
+        radius: 7, color: '#ffffff', weight: 2, fillColor: '#f43f5e', fillOpacity: 1, interactive: false,
+      }));
+    }
+  }, [waypoints, drawing, transect, transectHover]);
 
   // ── Product overlay (TCHP, D26, MLD, SLD, σ) from the model's daily grid ──
   useEffect(() => {
@@ -618,9 +750,81 @@ export const OceanExplorer: React.FC<OceanExplorerProps> = ({
                   </div>
                 )}
               </div>
+
+              {/* Transect / cross-section */}
+              <div className="pt-1.5 mt-1 border-t border-slate-800 space-y-1.5">
+                <div className="flex items-center justify-between text-slate-300">
+                  <span className="flex items-center gap-1.5"><Route className="w-3 h-3 text-cyan-400" />Transect</span>
+                  {transectStatus === 'loading' && <Loader2 className="w-3 h-3 animate-spin text-cyan-400" />}
+                </div>
+                {drawing ? (
+                  <>
+                    <div className="text-[9px] text-cyan-300/90 leading-snug">
+                      Click the map to add points ({waypoints.length}). Double-click or Finish to build the section.
+                    </div>
+                    <div className="flex gap-1">
+                      <button
+                        onClick={() => finishDrawing()}
+                        disabled={waypoints.length < 2}
+                        className="flex-1 px-2 py-1 rounded-md bg-cyan-500/20 border border-cyan-400/40 text-cyan-300 disabled:opacity-40"
+                      >
+                        Finish
+                      </button>
+                      <button onClick={clearTransect} className="px-2 py-1 rounded-md border border-slate-700 text-slate-400 hover:text-white">
+                        Cancel
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <div className="flex gap-1">
+                    <button
+                      onClick={startDrawing}
+                      className="flex-1 px-2 py-1 rounded-md border border-cyan-500/30 text-cyan-300 hover:bg-cyan-500/10"
+                    >
+                      Draw line
+                    </button>
+                    {waypoints.length > 0 && (
+                      <button onClick={clearTransect} className="px-2 py-1 rounded-md border border-slate-700 text-slate-400 hover:text-white">
+                        Clear
+                      </button>
+                    )}
+                  </div>
+                )}
+                {TRANSECT_PRESETS[selectedRegion].length > 0 ? (
+                  <select
+                    value=""
+                    onChange={(e) => {
+                      const preset = TRANSECT_PRESETS[selectedRegion][Number(e.target.value)];
+                      if (preset) applyPreset(preset.points);
+                    }}
+                    className="w-full bg-[#050e1f] border border-slate-700 rounded px-1.5 py-0.5 text-[10px] text-slate-200"
+                  >
+                    <option value="">Preset sections…</option>
+                    {TRANSECT_PRESETS[selectedRegion].map((p, i) => <option key={p.label} value={i}>{p.label}</option>)}
+                  </select>
+                ) : (
+                  <div className="text-[9px] text-amber-300/90 leading-snug">
+                    The model grid covers the Bay of Bengal only (8–22°N, 80–100°E); sections here will be empty.
+                  </div>
+                )}
+                {transectStatus === 'error' && (
+                  <div className="text-[9px] text-rose-300">Section request failed (is the API running?)</div>
+                )}
+              </div>
             </div>
           </div>
         </div>
+
+        {/* ── BOTTOM CROSS-SECTION PANEL ── */}
+        {transect && (
+          <div
+            className={`absolute left-4 bottom-4 h-[300px] z-20 glass-card rounded-2xl border border-cyan-500/30 overflow-hidden shadow-2xl backdrop-blur-xl bg-[#050b14]/95 ${
+              isPanelCollapsed ? 'right-4' : 'right-4 md:right-[28rem]'
+            }`}
+          >
+            <TransectSection data={transect} onHover={setTransectHover} onClose={clearTransect} />
+          </div>
+        )}
 
         {/* ── FLOATING RIGHT INSPECTOR DRAWER (Does NOT push or squeeze the map!) ── */}
         {!isPanelCollapsed && (
@@ -773,6 +977,22 @@ export const OceanExplorer: React.FC<OceanExplorerProps> = ({
                     <span>Reconstruct Vertical Profile (OceanDive)</span>
                     <ChevronRight className="w-4 h-4" />
                   </button>
+
+                  {/* One-page operational bulletin for this location and day */}
+                  <div className="flex items-center gap-2">
+                    <FileText className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                    <span className="text-[10px] text-slate-400 mr-auto">Point bulletin · {DEFAULT_DATE}</span>
+                    {(['pdf', 'png'] as const).map((f) => (
+                      <a
+                        key={f}
+                        href={pointBulletinUrl(selectedPoint.lat, selectedPoint.lng, f)}
+                        download
+                        className="px-2.5 py-1 rounded-lg border border-cyan-500/30 text-cyan-300 text-[10px] hover:bg-cyan-500/10 uppercase"
+                      >
+                        {f}
+                      </a>
+                    ))}
+                  </div>
                 </div>
               )}
 

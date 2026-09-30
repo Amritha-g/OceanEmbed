@@ -10,3 +10,4 @@ pydantic>=2.0.0
 pandas>=2.0.0
 python-multipart>=0.0.6
 httpx>=0.24.0
+matplotlib>=3.7.0
